@@ -102,6 +102,22 @@ class MLPAIModel:
 		batchIndices = np.arange(len(moves))
 		actorOutputs[batchIndices,moves] = self.GetCriticBellmanDifference(statesAfterMove, moves, rewards)
 		return self.TrainModel(states, actorOutputs, critic)
+	
+	def LogQValues(self, reward):
+		if not self.outputDiagnostics is None:
+			stateHash = tuple(self.stateBeforeLastMove.flatten().tolist())
+			if not stateHash in self.diagnosticsStateAtOutput:
+				self.diagnosticsStateAtOutput.add(stateHash)
+				self.diagnosticsLogOutputter.Output('Input')
+				self.diagnosticsLogOutputter.Output(str(self.stateBeforeLastMove))
+				self.diagnosticsLogOutputter.Output('')
+				self.diagnosticsLogOutputter.Output('Reward')
+				self.diagnosticsLogOutputter.Output(str(reward))
+				self.diagnosticsLogOutputter.Output('')
+				self.diagnosticsLogOutputter.Output('Output')
+				self.diagnosticsLogOutputter.Output(str(self.lastModelOutput))
+				self.diagnosticsLogOutputter.Output('')
+				self.diagnosticsLogOutputter.Output('')
 		
 	def ReceiveStateUpdate(self, state):
 		self.actualBoardDimensions = state.moveOutcomes.shape
@@ -125,21 +141,7 @@ class MLPAIModel:
 			self.gameState.rewards.append(reward)
 			
 			stateAfterMove = self.GetModelInputForState(self.gameState.stateSeqVectors)
-			
-			if not self.outputDiagnostics is None:
-				stateHash = tuple(self.stateBeforeLastMove.flatten().tolist())
-				if not stateHash in self.diagnosticsStateAtOutput:
-					self.diagnosticsStateAtOutput.add(stateHash)
-					self.diagnosticsLogOutputter.Output('Input')
-					self.diagnosticsLogOutputter.Output(str(self.stateBeforeLastMove))
-					self.diagnosticsLogOutputter.Output('')
-					self.diagnosticsLogOutputter.Output('Reward')
-					self.diagnosticsLogOutputter.Output(str(reward))
-					self.diagnosticsLogOutputter.Output('')
-					self.diagnosticsLogOutputter.Output('Output')
-					self.diagnosticsLogOutputter.Output(str(self.lastModelOutput))
-					self.diagnosticsLogOutputter.Output('')
-					self.diagnosticsLogOutputter.Output('')
+			self.LogQValues(reward)
 			
 			# build batch from current state and experiences buffer
 			experiences_states, experiences_statesAfterMove, experiences_moves, experiences_rewards = self.experienceBuffer.GetBatch().ToMatrices()
