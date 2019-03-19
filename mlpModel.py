@@ -10,18 +10,52 @@ from vector2 import Vector2
 from experienceReplayBuffer import ExperienceReplayBuffer
 from mlpModel_build import BuildMLPModel
 from rewardFunction import GetReward
+from normalizedBoard import NormalizedBoard
+from AIGameState import AIGameState
 
 class MLPAIModel:
 	def __init__(self, playerNumber, logOutputter=None, outputDiagnostics=None):
-		self.stateSeq = []
-		self.stateSeqVectors = []
 		self.playerNumber = playerNumber
-		self.modelName = 'MLP Model v1'
+		self.modelName = 'MLP Model v1'	
 		
-		self.modelSavePrefix = '{}_Player{}'.format(self.modelName.replace(' ','_'),  self.playerNumber)
-		self.actorModelFilename = '{}_actor.h5'.format(self.modelSavePrefix)
-		self.criticModelFilename = '{}_critic.h5'.format(self.modelSavePrefix)
+		self.modelIterations = 0		
+		self.trainCriticEveryIter = 20
+		self.saveModelEveryIter = 100
+		self.experienceBufferSize = 999
+		self.explorationProb = 0.005
+		self.maxSeqLength = 1
+		self.experienceBuffer = ExperienceReplayBuffer(self.experienceBufferSize)
 		
+		self.normedBoardLength = 10
+		self.maxMoveOutcome = len(MoveOutcome) + 1 # add 1 for empty hit result
+		self.normedBoard = NormalizedBoard(self.normedBoardLength)
+		self.gameState = AIGameState(self.normedBoard, self.maxSeqLength)
+		self.LoadModel()
+		self.LoadLogger(logOutputter, outputDiagnostics)
+		
+		# input:
+		#	10x10 board max x 5+1 hit states per position
+		#	alive ships
+		#	piecesBeenHit
+		# output:
+		#	10x10 board positions
+		normedBoardDimensions = self.normedBoard.GetBoardDimensions()
+		self.normedBoardPositions = normedBoardDimensions[0]*normedBoardDimensions[1]
+		self.inputDimension = self.normedBoardPositions * self.maxMoveOutcome + 2
+		self.outputDimension = self.normedBoardPositions
+		
+		self.stateBeforeLastMove = None
+		self.lastModelOutput = None
+		self.lastModelMove = None
+	
+	def ClearState(self):		
+		self.logOutputter.Output('\n\n\n\n\nClearing MLP model state\n\n\n\n\n')
+		self.gameState.ClearState()
+	
+	def GetPlayerNumber(self):
+		return self.playerNumber
+	
+	def LoadLogger(self, logOutputter, outputDiagnostics):
 		self.logOutputter = logOutputter
 		
 		self.outputDiagnostics = outputDiagnostics
@@ -30,31 +64,12 @@ class MLPAIModel:
 			self.diagnosticsStateAtOutput = set([])
 		else:
 			self.diagnosticsLogOutputter = None
-			self.diagnosticsStateAtOutput = None		
+			self.diagnosticsStateAtOutput = None
 		
-		self.modelIterations = 0		
-		self.trainCriticEveryIter = 20
-		self.saveModelEveryIter = 100
-		self.experienceBufferSize = 999
-		self.explorationProb = 0.005
-		self.experienceBuffer = ExperienceReplayBuffer(self.experienceBufferSize)
-		self.rewards = []
-		
-		self.normedBoardLength = 10
-		self.normedBoardPositions = self.normedBoardLength*self.normedBoardLength
-		self.maxMoveOutcome = len(MoveOutcome) + 1 # add 1 for empty hit result
-		
-		self.actualBoardDimensions = None
-		
-		# input:
-		#	10x10 board max x 5+1 hit states per position
-		#	alive ships
-		#	piecesBeenHit
-		# output:
-		#	10x10 board positions
-		self.maxSeqLength = 1
-		self.inputDimension = self.normedBoardPositions * self.maxMoveOutcome + 2
-		self.outputDimension = self.normedBoardPositions
+	def LoadModel(self):		
+		self.modelSavePrefix = '{}_Player{}'.format(self.modelName.replace(' ','_'),  self.playerNumber)
+		self.actorModelFilename = '{}_actor.h5'.format(self.modelSavePrefix)
+		self.criticModelFilename = '{}_critic.h5'.format(self.modelSavePrefix)
 		
 		if os.path.isfile(self.actorModelFilename):
 			print('Loading {}...'.format(self.actorModelFilename))
@@ -70,74 +85,8 @@ class MLPAIModel:
 			biggerl2Regularizer = regularizers.l2(0.05)
 			self.criticModel = BuildMLPModel(self.maxSeqLength, self.inputDimension, self.outputDimension, kernel_l2Reg=l2Regularizer, bias_l2Reg=l2Regularizer, last_kernel_l2Reg=biggerl2Regularizer, last_bias_l2Reg=biggerl2Regularizer)
 		
-		self.numModelMovesAt = {}
-		self.stateBeforeLastMove = None
-		self.lastModelOutput = None
-		self.lastModelMove = None
-	
-	def GetPlayerNumber(self):
-		return self.playerNumber
-	
-	def ClearState(self):
-		self.stateSeq = []
-		self.stateSeqVectors = []
-		self.rewards = []
-		self.numModelMovesAt = {}
-		self.stateBeforeLastMove = None
-		self.lastModelOutput = None
-		self.lastModelMove = None
-		self.logOutputter.Output('\n\n\n\n\nClearing MLP model state\n\n\n\n\n')
-		
 	def GetModelName(self):
 		return self.modelName
-	
-	def NormalizeBoardPosition(self, row, col):
-		normalizedRow = int((float(row) / self.actualBoardDimensions[1]) * self.normedBoardLength)
-		normalizedCol = int((float(col) / self.actualBoardDimensions[0]) * self.normedBoardLength)
-		return normalizedRow, normalizedCol
-		
-	def UnnormalizeBoardPosition(self, boardPos):
-		normedRow = boardPos / self.normedBoardLength
-		normedCol = boardPos - int(normedRow) * self.normedBoardLength
-		row = int((normedRow / self.normedBoardLength) * self.actualBoardDimensions[1])
-		col = int((normedCol / self.normedBoardLength) * self.actualBoardDimensions[0])
-		return row, col
-	
-	def SetActualBoardDimensions(self, dimensions):
-		self.actualBoardHeight = dimensions[0]
-		self.actualBoardWidth = dimensions[1]
-	
-	def CreateMoveOutcomesVector(self, moveOutcomes):
-		normalizedMoveOutcomes = np.zeros((self.normedBoardLength,self.normedBoardLength,self.maxMoveOutcome))
-		
-		for rowNumber in range(moveOutcomes.shape[0]):
-			for colNumber in range(moveOutcomes.shape[1]):
-				moveOutcome = int(moveOutcomes[rowNumber,colNumber])
-				normalizedRow, normalizedCol = self.NormalizeBoardPosition(rowNumber, colNumber)
-				normalizedMoveOutcomes[normalizedRow,normalizedCol,moveOutcome] = 1		
-		return np.array(normalizedMoveOutcomes).flatten()
-	
-	def CreateStateVector(self, state):
-		if state is None or state.moveOutcomes is None or state.moveOutcomes.shape[0] < 1:
-			raise Exception('MLPAIModel CreateStateVector called on invalid state data.')
-		self.SetActualBoardDimensions(state.moveOutcomes.shape)
-		moveOutcomeVector = self.CreateMoveOutcomesVector(state.moveOutcomes)
-		moveVectorUniqueValues = set(moveOutcomeVector.flatten().tolist())
-		filteredValues = set([0,1])
-		if len(moveVectorUniqueValues.difference(filteredValues)) > 0:
-			code.interact(local=locals())
-		
-		numericalStateVector = np.array([state.aliveShips, state.piecesBeenHit])
-		stateVector = np.append(moveOutcomeVector, numericalStateVector)
-		return stateVector
-		
-	def AppendState(self, state):		
-		if len(self.stateSeqVectors) > self.maxSeqLength and len(self.stateSeqVectors) > 1:
-			self.stateSeqVectors = self.stateSeqVectors[1:]
-			self.stateSeq = self.stateSeq[1:]
-		self.stateSeq.append(state)
-		stateVec = self.CreateStateVector(state)
-		self.stateSeqVectors.append(stateVec)
 		
 	def GetCriticBellmanDifference(self, statesAfterMove, moves, rewards):
 		batchIndices = np.arange(len(moves))
@@ -156,30 +105,26 @@ class MLPAIModel:
 		
 	def ReceiveStateUpdate(self, state):
 		self.actualBoardDimensions = state.moveOutcomes.shape
-		self.AppendState(state)
+		self.gameState.AppendState(state)
 		ownShipsDestroyed = 0
 		stateOfRounds = [state.moveOutcomes]
-		if len(self.stateSeq) > 1:
-			stateOfRounds.append(self.stateSeq[-2].moveOutcomes)
-			ownShipsDestroyed = self.stateSeq[-2].aliveShips - state.aliveShips
+		if len(self.gameState.stateSeq) > 1:
+			stateOfRounds.append(self.gameState.stateSeq[-2].moveOutcomes)
+			ownShipsDestroyed = self.gameState.stateSeq[-2].aliveShips - state.aliveShips
 		
 		if not self.stateBeforeLastMove is None and not self.lastModelOutput is None and not self.lastModelMove is None:
-			numMovesAtPosition = 0
-			if self.lastModelMove in self.numModelMovesAt:
-				numMovesAtPosition = self.numModelMovesAt[self.lastModelMove]
-				self.numModelMovesAt[self.lastModelMove] += 1
-			else:
-				self.numModelMovesAt[self.lastModelMove] = 1
+			numMovesAtPosition = self.gameState.GetMovesAtPosition(self.lastModelMove)
+			self.gameState.MoveMadeAtPosition(self.lastModelMove)
 			
 			# calculate reward
-			moveOutcomesOfRound = GetRoundMoveOutcomeVector(stateOfRounds)
+			moveOutcomesOfRound = self.gameState.GetRoundMoveOutcomeVector(stateOfRounds)
 			for outcomeIndex in range(1,len(moveOutcomesOfRound)):
 				if moveOutcomesOfRound[outcomeIndex] > 1:
 					code.interact(local=locals())
 			reward = GetReward(moveOutcomesOfRound, ownShipsDestroyed, numMovesAtPosition, self.logOutputter)
-			self.rewards.append(reward)
+			self.gameState.rewards.append(reward)
 			
-			stateAfterMove = self.GetModelInputForState(self.stateSeqVectors)
+			stateAfterMove = self.GetModelInputForState(self.gameState.stateSeqVectors)
 			
 			if not self.outputDiagnostics is None:
 				stateHash = tuple(self.stateBeforeLastMove.flatten().tolist())
@@ -272,7 +217,7 @@ class MLPAIModel:
 					else:
 						modelMoves.append(moveNum)
 					break
-				elif not moveNum in self.numModelMovesAt and currentTopK == topKToPick:
+				elif self.gameState.GetMovesAtPosition(moveNum) < 1 and currentTopK == topKToPick:
 					modelMoves.append(moveNum)
 					break
 				else:
@@ -281,7 +226,7 @@ class MLPAIModel:
 		return boardPositions
 		
 	def GetNextMove(self):
-		modelInput = self.GetModelInputForState(self.stateSeqVectors)
+		modelInput = self.GetModelInputForState(self.gameState.stateSeqVectors)
 		modelOutput = self.RunModelAtStates(modelInput)		
 		boardPos = self.GetMovesFromModelOutput(modelOutput, exploreRandomly=True)
 		if len(boardPos.shape) > 0:
@@ -293,26 +238,10 @@ class MLPAIModel:
 		self.lastModelOutput = modelOutput
 		self.lastModelMove = boardPos
 			
-		moveRow, moveCol = self.UnnormalizeBoardPosition(boardPos)
+		moveRow, moveCol = self.normedBoard.UnnormalizeBoardPosition(boardPos)
 		moveVec = Vector2(moveRow, moveCol)
 		self.logOutputter.Output('MLP shooting at {}'.format(moveVec))
 		return moveVec
-
-def GetRoundMoveOutcomeVector(stateOfRounds):
-	moveOutcomesOfRound = np.zeros((len(MoveOutcome)))
-	
-	if len(stateOfRounds) > 1 and stateOfRounds[0].shape != stateOfRounds[1].shape:
-		raise Exception('MLPAIModel GetRoundMoveOutcomeVector rounds must have the same shape.')
-	
-	rows = stateOfRounds[0].shape[0]
-	columns = stateOfRounds[0].shape[1]
-	
-	for row in range(rows):
-		for col in range(rows):
-			round0_result = int(stateOfRounds[0][row,col])
-			if len(stateOfRounds) < 2 or round0_result != int(stateOfRounds[1][row,col]):
-				moveOutcomesOfRound[round0_result] += 1
-	return moveOutcomesOfRound
 
 def OutputModelMetrics(fitResult, logOutputter):
 	if not fitResult is None:
