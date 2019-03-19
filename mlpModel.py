@@ -151,9 +151,7 @@ class MLPAIModel:
 		if critic is None:
 			critic = False
 		batchIndices = np.arange(len(moves))
-		#self.logOutputter.Output('Model predicted Q-values: {}'.format(actorOutputs[batchIndices,moves]))
 		actorOutputs[batchIndices,moves] = self.GetCriticBellmanDifference(statesAfterMove, moves, rewards)
-		#self.logOutputter.Output('Model target Q-values: {}'.format(actorOutputs[batchIndices,moves]))
 		return self.TrainModel(states, actorOutputs, critic)
 		
 	def ReceiveStateUpdate(self, state):
@@ -221,16 +219,11 @@ class MLPAIModel:
 			self.modelIterations += 1
 			
 			if self.modelIterations % self.trainCriticEveryIter == 0:
-				#self.logOutputter.Output('Training critic\n\n')
-				#print('\nTraining critic\n')
-				#criticOutputsAtExperiences = self.RunModelAtStates(all_states, critic=True)
-				#self.TrainOnExperiences(all_states, all_statesAfterMove, all_moves, all_rewards, criticOutputsAtExperiences, critic=True)
 				self.criticModel.set_weights(self.actorModel.get_weights())
 			if self.modelIterations > 0 and self.modelIterations % self.saveModelEveryIter == 0:
 				try:
 					self.criticModel.save(self.criticModelFilename)
 					self.actorModel.save(self.actorModelFilename)
-					#print('Saved {} models'.format(self.modelSavePrefix))
 				except:
 					pass
 			
@@ -270,7 +263,6 @@ class MLPAIModel:
 			currentTopK = 0
 			if exploreRandomly and np.random.rand(1) <= self.explorationProb:
 				modelMoves.append(np.random.randint(0,self.normedBoardPositions))
-				#self.logOutputter.Output('Making random move...')
 				continue
 			for moveNumIndex in range(movesSortedByQValue.shape[1]):
 				moveNum = movesSortedByQValue[rowNum, moveNumIndex]				
@@ -281,7 +273,6 @@ class MLPAIModel:
 						modelMoves.append(moveNum)
 					break
 				elif not moveNum in self.numModelMovesAt and currentTopK == topKToPick:
-					#self.logOutputter.Output('Picking top {}: {}'.format(topKToPick, moveNum))
 					modelMoves.append(moveNum)
 					break
 				else:
