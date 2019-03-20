@@ -7,7 +7,7 @@ from LogOutputter import LogOutputter
 import numpy as np
 from ship import MoveOutcome
 from vector2 import Vector2
-from experienceReplayBuffer import ExperienceReplayBuffer
+from experienceReplayBuffer import ExperienceReplayBuffer, Experience
 from mlpModel_build import BuildMLPModel
 from rewardFunction import GetReward
 from normalizedBoard import NormalizedBoard
@@ -18,13 +18,16 @@ class MLPAIModel:
 		self.playerNumber = playerNumber
 		self.modelName = 'MLP Model v1'	
 		
+		self.gameNum = 0
 		self.modelIterations = 0		
 		self.trainCriticEveryIter = 20
 		self.saveModelEveryIter = 100
-		self.experienceBufferSize = 999
 		self.explorationProb = 0.005
 		self.maxSeqLength = 1
-		self.experienceBuffer = ExperienceReplayBuffer(self.experienceBufferSize)
+		
+		experienceBufferSize = 999
+		experienceBufferBatch = 99
+		self.experienceBuffer = ExperienceReplayBuffer(experienceBufferSize, experienceBufferBatch)
 		
 		self.normedBoardLength = 10
 		self.maxMoveOutcome = len(MoveOutcome) + 1 # add 1 for empty hit result
@@ -48,6 +51,9 @@ class MLPAIModel:
 		self.lastModelOutput = None
 		self.lastModelMove = None
 	
+	def NewGame(self):
+		self.gameNum += 1
+		
 	def ClearState(self):		
 		self.logOutputter.Output('\n\n\n\n\nClearing MLP model state\n\n\n\n\n')
 		self.gameState.ClearState()
@@ -88,7 +94,7 @@ class MLPAIModel:
 	def GetModelName(self):
 		return self.modelName
 		
-	def GetCriticBellmanDifference(self, statesAfterMove, moves, rewards):
+	def GetCriticBellmanTarget(self, statesAfterMove, moves, rewards):
 		batchIndices = np.arange(len(moves))
 		actorOutput = self.RunModelAtStates(statesAfterMove, critic=False)
 		criticOutput = self.RunModelAtStates(statesAfterMove, critic=True)
@@ -96,12 +102,18 @@ class MLPAIModel:
 		maxQValuesAtState = criticOutput[batchIndices,actorBestMoves]
 		return rewards + 0.99*maxQValuesAtState
 	
-	def TrainOnExperiences(self, states, statesAfterMove, moves, rewards, actorOutputs, critic=None):
-		if critic is None:
-			critic = False
+	def TrainOnExperiences(self, states, statesAfterMove, moves, rewards, actorOutputs):
 		batchIndices = np.arange(len(moves))
-		actorOutputs[batchIndices,moves] = self.GetCriticBellmanDifference(statesAfterMove, moves, rewards)
-		return self.TrainModel(states, actorOutputs, critic)
+		bellmanTarget = self.GetCriticBellmanTarget(statesAfterMove, moves, rewards)
+		actorOutputAtMoves = actorOutputs[batchIndices,moves]
+		actorOutputs[batchIndices,moves] = bellmanTarget
+		self.TrainModel(states, actorOutputs)
+		bellmanDifference = np.abs(bellmanTarget - actorOutputAtMoves)
+		return bellmanDifference
+	
+	def TrainModel(self, modelInput, correctModelOutput):
+		fitResult = self.actorModel.fit(modelInput, correctModelOutput, batch_size=modelInput.shape[0], epochs=1, verbose=0)
+		OutputModelMetrics(fitResult, self.logOutputter)
 	
 	def LogQValues(self, reward):
 		if not self.outputDiagnostics is None:
@@ -118,6 +130,16 @@ class MLPAIModel:
 				self.diagnosticsLogOutputter.Output(str(self.lastModelOutput))
 				self.diagnosticsLogOutputter.Output('')
 				self.diagnosticsLogOutputter.Output('')
+
+	def TrainCritic(self):
+		self.criticModel.set_weights(self.actorModel.get_weights())
+		
+	def SaveModels(self):
+		try:
+			self.criticModel.save(self.criticModelFilename)
+			self.actorModel.save(self.actorModelFilename)
+		except:
+			pass
 		
 	def ReceiveStateUpdate(self, state):
 		self.actualBoardDimensions = state.moveOutcomes.shape
@@ -128,55 +150,60 @@ class MLPAIModel:
 			stateOfRounds.append(self.gameState.stateSeq[-2].moveOutcomes)
 			ownShipsDestroyed = self.gameState.stateSeq[-2].aliveShips - state.aliveShips
 		
-		if not self.stateBeforeLastMove is None and not self.lastModelOutput is None and not self.lastModelMove is None:
-			numMovesAtPosition = self.gameState.GetMovesAtPosition(self.lastModelMove)
-			self.gameState.MoveMadeAtPosition(self.lastModelMove)
+		if self.stateBeforeLastMove is None or self.lastModelOutput is None or self.lastModelMove is None:
+			return
+		
+		numMovesAtPosition = self.gameState.GetMovesAtPosition(self.lastModelMove)
+		self.gameState.MakeMoveAtPosition(self.lastModelMove)
+		
+		# calculate reward
+		moveOutcomesOfRound = self.gameState.GetRoundMoveOutcomeVector(stateOfRounds)
+		reward = GetReward(moveOutcomesOfRound, ownShipsDestroyed, numMovesAtPosition, self.logOutputter)
+		self.gameState.rewards.append(reward)
+		
+		stateAfterMove = self.GetModelInputForState(self.gameState.stateSeqVectors)
+		self.LogQValues(reward)
+		
+		# build batch from current state and experiences buffer
+		newExperience = Experience()
+		newExperience.key = (self.gameNum, self.modelIterations)
+		newExperience.state = self.stateBeforeLastMove[0,:]
+		newExperience.stateAfterMove = stateAfterMove[0,:]
+		newExperience.move = self.lastModelMove
+		newExperience.reward = reward
+		
+		experiences_keys, experiences_states, experiences_statesAfterMove, experiences_moves, experiences_rewards = self.experienceBuffer.GetBatchMatrices()
+		if experiences_states.shape[0] > 0:
+			actorOutputsAtExperiences = self.RunModelAtStates(experiences_states)
 			
-			# calculate reward
-			moveOutcomesOfRound = self.gameState.GetRoundMoveOutcomeVector(stateOfRounds)
-			for outcomeIndex in range(1,len(moveOutcomesOfRound)):
-				if moveOutcomesOfRound[outcomeIndex] > 1:
-					code.interact(local=locals())
-			reward = GetReward(moveOutcomesOfRound, ownShipsDestroyed, numMovesAtPosition, self.logOutputter)
-			self.gameState.rewards.append(reward)
-			
-			stateAfterMove = self.GetModelInputForState(self.gameState.stateSeqVectors)
-			self.LogQValues(reward)
-			
-			# build batch from current state and experiences buffer
-			experiences_states, experiences_statesAfterMove, experiences_moves, experiences_rewards = self.experienceBuffer.GetBatch().ToMatrices()
-			if experiences_states.shape[0] > 0:
-				actorOutputsAtExperiences = self.RunModelAtStates(experiences_states)
-				
-				all_states = np.append(experiences_states, stateAfterMove, axis=0)
-				all_statesAfterMove = np.append(experiences_statesAfterMove, self.stateBeforeLastMove, axis=0)
-				all_moves = np.append(experiences_moves, [self.lastModelMove])
-				all_rewards = np.append(experiences_rewards, [reward])
-				all_actorOutputs = np.append(actorOutputsAtExperiences, self.lastModelOutput, axis=0)
-			else:
-				all_states = stateAfterMove
-				all_statesAfterMove = self.stateBeforeLastMove
-				all_moves = np.array([self.lastModelMove])
-				all_rewards = np.array([reward])
-				all_actorOutputs = self.lastModelOutput
-			
-			# train model and add new experience to buffer
-			self.TrainOnExperiences(all_states, all_statesAfterMove, all_moves, all_rewards, all_actorOutputs)
-			self.experienceBuffer.Insert(self.stateBeforeLastMove[0,:], stateAfterMove[0,:], self.lastModelMove, reward)
-			self.modelIterations += 1
-			
-			if self.modelIterations % self.trainCriticEveryIter == 0:
-				self.criticModel.set_weights(self.actorModel.get_weights())
-			if self.modelIterations > 0 and self.modelIterations % self.saveModelEveryIter == 0:
-				try:
-					self.criticModel.save(self.criticModelFilename)
-					self.actorModel.save(self.actorModelFilename)
-				except:
-					pass
-			
-			self.stateBeforeLastMove = None
-			self.lastModelOutput = None
-			self.lastModelMove = None
+			all_states = np.append(experiences_states, stateAfterMove, axis=0)
+			all_statesAfterMove = np.append(experiences_statesAfterMove, self.stateBeforeLastMove, axis=0)
+			all_moves = np.append(experiences_moves, [self.lastModelMove])
+			all_rewards = np.append(experiences_rewards, [reward])
+			all_actorOutputs = np.append(actorOutputsAtExperiences, self.lastModelOutput, axis=0)
+		else:
+			all_states = stateAfterMove
+			all_statesAfterMove = self.stateBeforeLastMove
+			all_moves = np.array([self.lastModelMove])
+			all_rewards = np.array([reward])
+			all_actorOutputs = self.lastModelOutput
+		
+		# train model and add new experience to buffer
+		bellmanDifferences = self.TrainOnExperiences(all_states, all_statesAfterMove, all_moves, all_rewards, all_actorOutputs)
+		self.experienceBuffer.UpdateBellmanDifferences(experiences_keys, bellmanDifferences[:-1])
+		
+		newExperience.bellmanDifference = bellmanDifferences[-1]
+		self.experienceBuffer[newExperience.key] = newExperience
+		self.modelIterations += 1
+		
+		if self.modelIterations % self.trainCriticEveryIter == 0:
+			self.TrainCritic()			
+		if self.modelIterations > 0 and self.modelIterations % self.saveModelEveryIter == 0:
+			self.SaveModels()
+		
+		self.stateBeforeLastMove = None
+		self.lastModelOutput = None
+		self.lastModelMove = None
 	
 	def GetModelInputForState(self, stateVectors):
 		modelInput = np.zeros((1, self.maxSeqLength, self.inputDimension))
@@ -193,13 +220,6 @@ class MLPAIModel:
 		if modelOutput is None or modelOutput.shape != (len(modelInputs), self.outputDimension):
 			raise Exception('MLP Model predict returned invalid result.')
 		return modelOutput
-	
-	def TrainModel(self, modelInput, correctModelOutput, critic=None):
-		if critic is None or not critic:
-			fitResult = self.actorModel.fit(modelInput, correctModelOutput, batch_size=modelInput.shape[0], epochs=1, verbose=0)
-		else:
-			fitResult = self.criticModel.fit(modelInput, correctModelOutput, batch_size=modelInput.shape[0], epochs=1, verbose=0)
-		OutputModelMetrics(fitResult, self.logOutputter)
 	
 	def GetMovesFromModelOutput(self, modelOutputs, exploreRandomly=None):
 		movesSortedByQValue = np.argsort(-modelOutputs, axis=-1)

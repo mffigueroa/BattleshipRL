@@ -21,7 +21,7 @@ class AIGameState:
 		else:
 			return self.numModelMovesAt[position]
 		
-	def MoveMadeAtPosition(self, position):
+	def MakeMoveAtPosition(self, position):
 		if position in self.numModelMovesAt:
 			self.numModelMovesAt[position] += 1
 		else:

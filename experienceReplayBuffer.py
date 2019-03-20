@@ -1,69 +1,66 @@
 import numpy as np
 
-class Experiences:
+class Experience:
 	def __init__(self):
-		self.states = []
-		self.statesAfterMove = []
-		self.moves = []
-		self.rewards = []
-	def Append(self, state, stateAfterMove, move, reward):
-		self.states.append(state)
-		self.statesAfterMove.append(stateAfterMove)
-		self.moves.append(move)
-		self.rewards.append(reward)
-	def Set(self, index, state, stateAfterMove, move, reward):
-		self.states[index] = state
-		self.statesAfterMove[index] = stateAfterMove
-		self.moves[index] = move
-		self.rewards[index] = reward
-	def ToMatrices(self):
-		return np.array(self.states), np.array(self.statesAfterMove), np.array(self.moves), np.array(self.rewards)
+		self.key = None
+		self.state = None
+		self.stateAfterMove = None
+		self.move = None
+		self.reward = None
+		self.bellmanDifference = None
 
 # maintains (States, StatesAfterMove, Moves, Rewards) with a variety of reward values
 class ExperienceReplayBuffer:
-	def __init__(self, maxSize):
-		self.rewardCountsOverAllRewards = {}
-		self.rewardCountsForBuffer = {}
-		self.maxSize = maxSize		
-		self.experiences = Experiences()
+	def __init__(self, maxSize, batchSize):
+		self.maxSize = maxSize
+		self.batchSize = batchSize
+		self.experiences = {}
+		self.experienceKeysSorted = []
 	
-	def GetBatch(self):
+	def GetExperiences(self):
 		return self.experiences
 	
-	# find an approximation to the median of the occurrences of reward values.
-	# if this reward is below that median (i.e. unlikely reward value),
-	# this will return an experience with a reward at that median. otherwise, will return None
-	def FindExperienceToReplace(self, reward):
-		sortedRewardCountTuples = sorted(self.rewardCountsForBuffer.items(), key= lambda x: x[1])
-		sortedRewardCounts = list(zip(*sortedRewardCountTuples))[1]
-		middleRewardCountIndex = len(sortedRewardCounts) // 2
-		middleRewardCount = sortedRewardCounts[middleRewardCountIndex]
-		countsForThisReward = 0
-		if reward in self.rewardCountsForBuffer:
-			countsForThisReward = self.rewardCountsForBuffer[reward]
-		if countsForThisReward >= middleRewardCount:
-			return None
-		rewardValueToReplace = sortedRewardCountTuples[middleRewardCountIndex][0]
-		firstExperienceWithValue = self.experiences.rewards.index(rewardValueToReplace)
-		return firstExperienceWithValue
-		
-	def Insert(self, environmentState, stateAfterMove, moveAtExperience, reward):
-		if len(self.experiences.states) < self.maxSize:
-			self.experiences.Append(environmentState, stateAfterMove, moveAtExperience, reward)
-		else:
-			experienceToReplace = self.FindExperienceToReplace(reward)
-			if experienceToReplace is None:
-				return
-			rewardValueToReplace = self.experiences.rewards[experienceToReplace]
-			self.rewardCountsForBuffer[rewardValueToReplace] -= 1
-			self.experiences.Set(experienceToReplace, environmentState, stateAfterMove, moveAtExperience, reward)
-			
-		if not reward in self.rewardCountsOverAllRewards:
-			self.rewardCountsOverAllRewards[reward] = 1
-			self.rewardCountsForBuffer[reward] = 1
-		else:
-			self.rewardCountsOverAllRewards[reward] += 1
-			self.rewardCountsForBuffer[reward] += 1
+	def GetBatchMatrices(self):
+		keys = []
+		rewards = []
+		moves = []
+		states = []
+		statesAfterMove = []
+		for key, experience in self.experiences.items():
+			keys.append(key)
+			rewards.append(experience.reward)
+			moves.append(experience.move)
+			states.append(experience.state)
+			statesAfterMove.append(experience.stateAfterMove)
+		return keys, np.array(states), np.array(statesAfterMove), np.array(moves), np.array(rewards)
 	
-	def GetCurrentSize(self):
-		return len(self.experiences.states)
+	def UpdateBellmanDifferences(self, keys, bellmanDifferences):
+		bellmanDifferences = list(bellmanDifferences.flatten())
+		for key, bellmanDifference in zip(keys, bellmanDifferences):
+			if key in self.experiences:
+				self.experiences[key].bellmanDifference = bellmanDifference
+		
+	def __getitem__(self, key):
+		if key in self.experiences:
+			rewardValueToRemove = self.experiences[key].reward
+			del self.experiences[key]
+	
+	def __delitem__(self, key):
+		if key in self.experiences:
+			self.__RemoveFromRewardValues(key)
+			return self.experiences[key]
+		return None
+	
+	def __setitem__(self, key, experience):
+		if len(self.experiences) + 1 >= self.maxSize:
+			experienceToRemove = self.experienceKeysSorted[0]
+			self.experienceKeysSorted = self.experienceKeysSorted[1:]
+			del self.experiences[experienceToRemove]
+			
+		if len(self.experiences) < self.maxSize:
+			self.experiences[key] = experience
+			self.experienceKeysSorted.append(key)
+	
+	def __len__(self):
+		return len(self.experiences)
+	

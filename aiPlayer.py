@@ -19,6 +19,10 @@ class AIPlayer(IPlayer):
 		self.round = 0
 		self.logOutputter = logOutputter
 	
+	def NewGame(self):
+		self.aiModel.NewGame()
+		self.aiModel.ClearState()
+		
 	def ClearState(self):
 		self.aliveShips = 0
 		self.piecesBeenHit = 0

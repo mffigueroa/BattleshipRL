@@ -19,8 +19,8 @@ numShipsOfSize = { 2 : 1, 3 : 2, 4 : 1, 5 : 1 }
 boardSize = Vector2(10, 10)
 
 while True:
-	aiPlayer_0.ClearState()
-	aiPlayer_1.ClearState()
+	aiPlayer_0.NewGame()
+	aiPlayer_1.NewGame()
 	board = Board(boardSize, numShipsOfSize, players)
 	game = Game(board)
 	game.Play()

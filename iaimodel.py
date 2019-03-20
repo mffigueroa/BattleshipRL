@@ -16,3 +16,7 @@ class IAIModel:
 	def ReceiveStateUpdate(self, state): raise NotImplementedError
 	@abstractmethod
 	def GetNextMove(self): raise NotImplementedError
+	@abstractmethod
+	def ClearState(self): raise NotImplementedError
+	@abstractmethod
+	def NewGame(self): raise NotImplementedError
