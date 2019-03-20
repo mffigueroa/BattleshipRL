@@ -27,7 +27,9 @@ class MLPAIModel:
 		
 		experienceBufferSize = 999
 		experienceBufferBatch = 99
-		self.experienceBuffer = ExperienceReplayBuffer(experienceBufferSize, experienceBufferBatch)
+		priorityRandomness = 0.6
+		priorityBiasFactor = 0.01
+		self.experienceBuffer = ExperienceReplayBuffer(experienceBufferSize, experienceBufferBatch, priorityRandomness, priorityBiasFactor)
 		
 		self.normedBoardLength = 10
 		self.maxMoveOutcome = len(MoveOutcome) + 1 # add 1 for empty hit result

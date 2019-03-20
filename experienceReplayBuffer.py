@@ -1,3 +1,4 @@
+import math
 import numpy as np
 
 class Experience:
@@ -11,11 +12,13 @@ class Experience:
 
 # maintains (States, StatesAfterMove, Moves, Rewards) with a variety of reward values
 class ExperienceReplayBuffer:
-	def __init__(self, maxSize, batchSize):
+	def __init__(self, maxSize, batchSize, priorityRandomness=0.6, priorityBiasFactor=0.01):
 		self.maxSize = maxSize
 		self.batchSize = batchSize
 		self.experiences = {}
 		self.experienceKeysSorted = []
+		self.priorityRandomness = priorityRandomness
+		self.priorityBiasFactor = priorityBiasFactor
 	
 	def GetExperiences(self):
 		return self.experiences
@@ -39,7 +42,7 @@ class ExperienceReplayBuffer:
 		for key, bellmanDifference in zip(keys, bellmanDifferences):
 			if key in self.experiences:
 				self.experiences[key].bellmanDifference = bellmanDifference
-		
+	
 	def __getitem__(self, key):
 		if key in self.experiences:
 			rewardValueToRemove = self.experiences[key].reward
@@ -63,4 +66,11 @@ class ExperienceReplayBuffer:
 	
 	def __len__(self):
 		return len(self.experiences)
-	
+		
+	def __GetExperiencePriorities(self):
+		bellmanDifferences = []
+		for key, experience in self.experiences.items():
+			bellmanDifferences.append(experience.bellmanDifference)
+		bellmanDifferences = np.power(np.array(bellmanDifferences) + self.priorityBiasFactor, self.priorityRandomness)
+		summed = np.sum(bellmanDifferencesExponentiated)
+		return bellmanDifferencesExponentiated / summed
