@@ -25,7 +25,7 @@ class MLPAIModel:
 		self.explorationProb = 0.005
 		self.maxSeqLength = 1
 		
-		experienceBufferSize = 999
+		experienceBufferSize = 500000
 		experienceBufferBatch = 99
 		priorityRandomness = 0.6
 		priorityBiasFactor = 0.01
@@ -35,7 +35,6 @@ class MLPAIModel:
 		self.maxMoveOutcome = len(MoveOutcome) + 1 # add 1 for empty hit result
 		self.normedBoard = NormalizedBoard(self.normedBoardLength)
 		self.gameState = AIGameState(self.normedBoard, self.maxSeqLength)
-		self.LoadModel()
 		self.LoadLogger(logOutputter, outputDiagnostics)
 		
 		# input:
@@ -48,6 +47,7 @@ class MLPAIModel:
 		self.normedBoardPositions = normedBoardDimensions[0]*normedBoardDimensions[1]
 		self.inputDimension = self.normedBoardPositions * self.maxMoveOutcome + 2
 		self.outputDimension = self.normedBoardPositions
+		self.LoadModel()
 		
 		self.stateBeforeLastMove = None
 		self.lastModelOutput = None
@@ -104,17 +104,17 @@ class MLPAIModel:
 		maxQValuesAtState = criticOutput[batchIndices,actorBestMoves]
 		return rewards + 0.99*maxQValuesAtState
 	
-	def TrainOnExperiences(self, states, statesAfterMove, moves, rewards, actorOutputs):
-		batchIndices = np.arange(len(moves))
-		bellmanTarget = self.GetCriticBellmanTarget(statesAfterMove, moves, rewards)
-		actorOutputAtMoves = actorOutputs[batchIndices,moves]
-		actorOutputs[batchIndices,moves] = bellmanTarget
-		self.TrainModel(states, actorOutputs)
+	def TrainOnExperiences(self, experiencesBatch, actorOutputs):
+		batchIndices = np.arange(len(experiencesBatch.moves))
+		bellmanTarget = self.GetCriticBellmanTarget(experiencesBatch.statesAfterMove, experiencesBatch.moves, experiencesBatch.rewards)
+		actorOutputAtMoves = actorOutputs[batchIndices,experiencesBatch.moves]
+		actorOutputs[batchIndices,experiencesBatch.moves] = bellmanTarget
+		self.TrainModel(experiencesBatch.states, actorOutputs)
 		bellmanDifference = np.abs(bellmanTarget - actorOutputAtMoves)
 		return bellmanDifference
 	
-	def TrainModel(self, modelInput, correctModelOutput):
-		fitResult = self.actorModel.fit(modelInput, correctModelOutput, batch_size=modelInput.shape[0], epochs=1, verbose=0)
+	def TrainModel(self, modelInput, correctModelOutput, importanceSamplingWeights=None):
+		fitResult = self.actorModel.fit(modelInput, correctModelOutput, batch_size=modelInput.shape[0], epochs=1, verbose=0, sample_weight=importanceSamplingWeights)
 		OutputModelMetrics(fitResult, self.logOutputter)
 	
 	def LogQValues(self, reward):
@@ -174,29 +174,37 @@ class MLPAIModel:
 		newExperience.move = self.lastModelMove
 		newExperience.reward = reward
 		
-		experiences_keys, experiences_states, experiences_statesAfterMove, experiences_moves, experiences_rewards = self.experienceBuffer.GetBatchMatrices()
-		if experiences_states.shape[0] > 0:
-			actorOutputsAtExperiences = self.RunModelAtStates(experiences_states)
+		experiencesBatch = self.experienceBuffer.GetBatchMatrices()
+		if experiencesBatch.states.shape[0] > 0:
+			actorOutputsAtBatch = self.RunModelAtStates(experiencesBatch.states)
 			
-			all_states = np.append(experiences_states, stateAfterMove, axis=0)
-			all_statesAfterMove = np.append(experiences_statesAfterMove, self.stateBeforeLastMove, axis=0)
-			all_moves = np.append(experiences_moves, [self.lastModelMove])
-			all_rewards = np.append(experiences_rewards, [reward])
-			all_actorOutputs = np.append(actorOutputsAtExperiences, self.lastModelOutput, axis=0)
+			experiencesBatch.states = np.append(experiencesBatch.states, stateAfterMove, axis=0)
+			experiencesBatch.statesAfterMove = np.append(experiencesBatch.statesAfterMove, self.stateBeforeLastMove, axis=0)
+			experiencesBatch.moves = np.append(experiencesBatch.moves, [self.lastModelMove])
+			experiencesBatch.rewards = np.append(experiencesBatch.rewards, [reward])
+			actorOutputsAtBatch = np.append(actorOutputsAtBatch, self.lastModelOutput, axis=0)
 		else:
-			all_states = stateAfterMove
-			all_statesAfterMove = self.stateBeforeLastMove
-			all_moves = np.array([self.lastModelMove])
-			all_rewards = np.array([reward])
-			all_actorOutputs = self.lastModelOutput
+			experiencesBatch.states = stateAfterMove
+			experiencesBatch.statesAfterMove = self.stateBeforeLastMove
+			experiencesBatch.moves = np.array([self.lastModelMove])
+			experiencesBatch.rewards = np.array([reward])
+			actorOutputsAtBatch = self.lastModelOutput
 		
+		experiencesBatch.importanceSamplingWeights = np.append([1.0], experiencesBatch.importanceSamplingWeights)
 		# train model and add new experience to buffer
-		bellmanDifferences = self.TrainOnExperiences(all_states, all_statesAfterMove, all_moves, all_rewards, all_actorOutputs)
-		self.experienceBuffer.UpdateBellmanDifferences(experiences_keys, bellmanDifferences[:-1])
+		bellmanDifferences = self.TrainOnExperiences(experiencesBatch, actorOutputsAtBatch)
+		self.experienceBuffer.UpdateBellmanDifferences(experiencesBatch.keys, bellmanDifferences[:-1])
 		
 		newExperience.bellmanDifference = bellmanDifferences[-1]
 		self.experienceBuffer[newExperience.key] = newExperience
 		self.modelIterations += 1
+		
+		for experienceModelIteration in range(self.modelIterations):
+			experienceKey = (self.gameNum, experienceModelIteration)
+			if experienceKey in self.experienceBuffer:
+				self.experienceBuffer[experienceKey].rolloutLength += 1
+				self.experienceBuffer[experienceKey].rewardRolloutSum += reward
+				self.experienceBuffer[experienceKey].lastStateInRollout = newExperience.stateAfterMove
 		
 		if self.modelIterations % self.trainCriticEveryIter == 0:
 			self.TrainCritic()			
