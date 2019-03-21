@@ -19,19 +19,20 @@ class MLPAIModel:
 		self.modelName = 'MLP Model v1'	
 		
 		self.gameNum = 0
-		self.modelIterations = 0		
+		self.modelIterations = 0
+		self.gameStartModelIterations = 0
 		self.trainCriticEveryIter = 20
 		self.saveModelEveryIter = 100
 		self.explorationProb = 0.005
 		self.maxSeqLength = 1
 		
-		experienceBufferSize = 500000
+		experienceBufferSize = 1000000
 		experienceBufferBatch = 99
 		priorityRandomness = 0.6
 		priorityBiasFactor = 0.01
 		self.currentRolloutLengthMax = 1
-		self.absoluteMaxRolloutLength = 4
-		self.rolloutLengthIncreaseEveryGame = 300
+		self.absoluteMaxRolloutLength = 10
+		self.rolloutLengthIncreaseEveryGame = 500
 		self.experienceBuffer = ExperienceReplayBuffer(experienceBufferSize, experienceBufferBatch, priorityRandomness, priorityBiasFactor)
 		
 		self.normedBoardLength = 10
@@ -58,6 +59,7 @@ class MLPAIModel:
 	
 	def NewGame(self):
 		self.gameNum += 1
+		self.gameStartModelIterations = self.modelIterations
 		if self.gameNum > 0 and self.gameNum % self.rolloutLengthIncreaseEveryGame == 0:
 			self.currentRolloutLengthMax = min(self.currentRolloutLengthMax + 1, self.absoluteMaxRolloutLength)
 		
@@ -94,8 +96,6 @@ class MLPAIModel:
 			print('Loading {}...'.format(self.criticModelFilename))
 			self.criticModel = load_model(self.criticModelFilename)
 		else:
-			l2Regularizer = regularizers.l2(0.01)
-			biggerl2Regularizer = regularizers.l2(0.05)
 			self.criticModel = BuildMLPModel(self.maxSeqLength, self.inputDimension, self.outputDimension, kernel_l2Reg=l2Regularizer, bias_l2Reg=l2Regularizer, last_kernel_l2Reg=biggerl2Regularizer, last_bias_l2Reg=biggerl2Regularizer)
 		
 	def GetModelName(self):
@@ -120,6 +120,7 @@ class MLPAIModel:
 	
 	def TrainModel(self, modelInput, correctModelOutput, importanceSamplingWeights=None):
 		fitResult = self.actorModel.fit(modelInput, correctModelOutput, batch_size=modelInput.shape[0], epochs=1, verbose=0, sample_weight=importanceSamplingWeights)
+		self.logOutputter.Output('Experience Buffer Size: {}'.format(len(self.experienceBuffer)))
 		OutputModelMetrics(fitResult, self.logOutputter)
 	
 	def LogQValues(self, reward):
@@ -147,7 +148,11 @@ class MLPAIModel:
 			self.actorModel.save(self.actorModelFilename)
 		except:
 			pass
-		
+	
+	def UpdateImportanceSampling(self):
+		# tuned to gradually increase to 0.5 at 2 million iterations
+		self.experienceBuffer.SetImportanceSamplingExponent(self.modelIterations / (self.modelIterations + 2000000))
+	
 	def ReceiveStateUpdate(self, state):
 		self.actualBoardDimensions = state.moveOutcomes.shape
 		self.gameState.AppendState(state)
@@ -179,6 +184,7 @@ class MLPAIModel:
 		newExperience.move = self.lastModelMove
 		newExperience.reward = reward
 		
+		self.UpdateImportanceSampling()
 		experiencesBatch = self.experienceBuffer.GetBatchMatrices()
 		if experiencesBatch.states.shape[0] > 0:
 			actorOutputsAtBatch = self.RunModelAtStates(experiencesBatch.states)
@@ -204,7 +210,7 @@ class MLPAIModel:
 		self.experienceBuffer[newExperience.key] = newExperience
 		self.modelIterations += 1
 		
-		for experienceModelIteration in range(self.modelIterations):
+		for experienceModelIteration in range(self.gameStartModelIterations, self.modelIterations):
 			experienceKey = (self.gameNum, experienceModelIteration)
 			if experienceKey in self.experienceBuffer and self.experienceBuffer[experienceKey].rolloutLength < self.currentRolloutLengthMax:
 				self.experienceBuffer[experienceKey].rolloutLength += 1

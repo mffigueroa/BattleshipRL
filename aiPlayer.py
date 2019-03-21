@@ -21,7 +21,7 @@ class AIPlayer(IPlayer):
 	
 	def NewGame(self):
 		self.aiModel.NewGame()
-		self.aiModel.ClearState()
+		self.ClearState()
 		
 	def ClearState(self):
 		self.aliveShips = 0
