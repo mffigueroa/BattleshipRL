@@ -1,11 +1,11 @@
 import numpy as np
 from iplayer import IPlayer
-from shipPlacementUtility import RandomlyPlaceShips
+from shipPlacementUtility import RandomlyPlaceShips, RepeatShipPlacement
 from ship import MoveOutcome
 from iaimodel import IAIModel, AIModelState
 
 class AIPlayer(IPlayer):	
-	def __init__(self, aiModel, logOutputter):
+	def __init__(self, aiModel, logOutputter, numberShipPlacementRepeats = None):			
 		self.aiModel = aiModel
 		self.playerNumber = self.aiModel.GetPlayerNumber()
 		self.playerName = 'AIPlayer{} #{}'.format(self.aiModel.GetModelName(), self.playerNumber)
@@ -17,9 +17,17 @@ class AIPlayer(IPlayer):
 		self.currentlyPlaying = True
 		self.didWin = False
 		self.round = 0
+		self.gameNum = 1
 		self.logOutputter = logOutputter
+		self.lastShipPlacement = None
+		self.numberShipPlacementRepeated = 0
+		if not numberShipPlacementRepeats is None:
+			self.numberShipPlacementRepeats = numberShipPlacementRepeats
+		else:
+			self.numberShipPlacementRepeats = 5
 	
 	def NewGame(self):
+		self.gameNum += 1
 		self.aiModel.NewGame()
 		self.ClearState()
 		
@@ -43,7 +51,12 @@ class AIPlayer(IPlayer):
 		super(AIPlayer, self).SetBoard(board)
 	
 	def PlaceShips(self, board):
-		self.ships = RandomlyPlaceShips(board, self)
+		if not self.lastShipPlacement is None and self.numberShipPlacementRepeated < self.numberShipPlacementRepeats:
+			self.ships = RepeatShipPlacement(board, self, self.lastShipPlacement)
+			self.numberShipPlacementRepeated += 1
+		else:
+			self.ships, self.lastShipPlacement = RandomlyPlaceShips(board, self)
+			self.numberShipPlacementRepeated = 0
 		self.aliveShips = len(self.ships)
 		self.SendStateUpdate()
 		return self.ships

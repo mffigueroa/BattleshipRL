@@ -9,6 +9,7 @@ def RandomlyPlaceShips(board, player):
 	numShipsOfSize = board.GetNumShipsOfSize()
 	shipSizesToPlace = [ shipSize for shipSize in numShipsOfSize.keys() for i in range(numShipsOfSize[shipSize]) ]
 	placedShips = []
+	shipOrigins = []
 	
 	for shipSize in shipSizesToPlace:
 		boardLocation = None
@@ -18,7 +19,7 @@ def RandomlyPlaceShips(board, player):
 			isVertical = random.randrange(0,10) < 5
 			locationAtIndex = boardLocations[boardLocationIndex]
 			
-			shipAtLocation = Ship(shipSize, player, locationAtIndex, isVertical)			
+			shipAtLocation = Ship(shipSize, player, locationAtIndex, isVertical)	
 			shipPieceLocations = shipAtLocation.GetPieceLocations()
 			allLocationsFree = True
 			
@@ -36,9 +37,18 @@ def RandomlyPlaceShips(board, player):
 			placedShips.append(shipAtLocation)
 			for location in shipPieceLocations:
 				locationsTaken.add(location)
+			
+			shipOrigins.append({'size' : shipSize, 'origin' : boardLocation, 'isVertical' : isVertical})
 			break
 			
 	if len(placedShips) < len(shipSizesToPlace):
 		raise Exception('Failed to randomly place ships on board.')
 	
+	return placedShips, shipOrigins
+
+def RepeatShipPlacement(board, player, shipOrigins):
+	placedShips = []
+	for shipOrigin in shipOrigins:
+		shipAtLocation = Ship(shipOrigin['size'], player, shipOrigin['origin'], shipOrigin['isVertical'])
+		placedShips.append(shipAtLocation)
 	return placedShips
