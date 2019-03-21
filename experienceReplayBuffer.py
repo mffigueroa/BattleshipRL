@@ -38,6 +38,9 @@ class ExperiencesBatch:
 		self.moves = np.array(moves)
 		self.rewards = np.array(rewards)
 		self.importanceSamplingWeights = np.array(importanceSamplingWeights)
+	
+	def __len__(self):
+		return len(self.states)
 
 # maintains (States, StatesAfterMove, Moves, Rewards) with a variety of reward values
 class ExperienceReplayBuffer:
