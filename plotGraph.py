@@ -75,7 +75,8 @@ def PlotGameStatus():
 		logFiles.append(fileObj)
 		logNum += 1
 	
-	samplePerc = 0.0001
+	#samplePerc = 0.01
+	samplePerc = 1.0
 	gamesBeforeParse = len(newGameLineNums)
 	logNum = 0
 	
@@ -84,6 +85,9 @@ def PlotGameStatus():
 		losses = []
 		rewardsInSum = []
 		movAvgRewards = []
+		lossesRollingWindow = []
+		if 'lossesRollingWindow' in players[logNum]:
+			lossesRollingWindow = players[logNum]['lossesRollingWindow']
 		lineNum = 0
 		while True:
 			line = log.readline()
@@ -101,6 +105,9 @@ def PlotGameStatus():
 					rewards.append(reward)
 			elif line[:len(lossPrefix)] == lossPrefix:
 				loss = float(line[len(lossPrefix):-1])
+				lossesRollingWindow.append(loss)
+				if len(lossesRollingWindow) > 2000:
+					lossesRollingWindow = lossesRollingWindow[1000:]
 				if doSample:
 					losses.append(loss)
 			elif logNum == 0 and line[:len(turnPrefix)] == turnPrefix:
@@ -110,11 +117,12 @@ def PlotGameStatus():
 			
 			lineNum += 1
 		if len(players[logNum].keys()) < 1:
-			players[logNum] = { 'rewards' : rewards, 'losses' : losses, 'movAvgRewards' : movAvgRewards }
+			players[logNum] = { 'rewards' : rewards, 'losses' : losses, 'movAvgRewards' : movAvgRewards, 'lossesRollingWindow' : lossesRollingWindow }
 		else:
 			players[logNum]['rewards'].extend(rewards)
 			players[logNum]['losses'].extend(losses)
 			players[logNum]['movAvgRewards'].extend(movAvgRewards)
+			players[logNum]['lossesRollingWindow'] = lossesRollingWindow
 		
 		logNum += 1
 	
@@ -151,6 +159,12 @@ def PlotGameStatus():
 	PlotGraphWithTrendLine(players[1]['movAvgRewards'], player1_movAvgRewards, 'Moving Avg Rewards', 'Turn #', 'Moves')
 	PlotGraphWithTrendLine(players[0]['losses'], player0_loss, 'Losses', 'Turn #', 'Moves')
 	PlotGraphWithTrendLine(players[1]['losses'], player1_loss, 'Losses', 'Turn #', 'Moves')
+	
+	player0_maxLossInWindow = np.max(players[0]['lossesRollingWindow'])
+	player0_loss.set_ylim((0, player0_maxLossInWindow * 1.1))
+	
+	player1_maxLossInWindow = np.max(players[1]['lossesRollingWindow'])
+	player1_loss.set_ylim((0, player1_maxLossInWindow * 1.1))
 	
 	if firstDraw:
 		plt.show()
