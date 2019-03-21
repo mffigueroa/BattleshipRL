@@ -29,6 +29,9 @@ class MLPAIModel:
 		experienceBufferBatch = 99
 		priorityRandomness = 0.6
 		priorityBiasFactor = 0.01
+		self.currentRolloutLengthMax = 1
+		self.absoluteMaxRolloutLength = 4
+		self.rolloutLengthIncreaseEveryGame = 300
 		self.experienceBuffer = ExperienceReplayBuffer(experienceBufferSize, experienceBufferBatch, priorityRandomness, priorityBiasFactor)
 		
 		self.normedBoardLength = 10
@@ -55,6 +58,8 @@ class MLPAIModel:
 	
 	def NewGame(self):
 		self.gameNum += 1
+		if self.gameNum > 0 and self.gameNum % self.rolloutLengthIncreaseEveryGame == 0:
+			self.currentRolloutLengthMax = min(self.currentRolloutLengthMax + 1, self.absoluteMaxRolloutLength)
 		
 	def ClearState(self):		
 		self.logOutputter.Output('\n\n\n\n\nClearing MLP model state\n\n\n\n\n')
@@ -201,7 +206,7 @@ class MLPAIModel:
 		
 		for experienceModelIteration in range(self.modelIterations):
 			experienceKey = (self.gameNum, experienceModelIteration)
-			if experienceKey in self.experienceBuffer:
+			if experienceKey in self.experienceBuffer and self.experienceBuffer[experienceKey].rolloutLength < self.currentRolloutLengthMax:
 				self.experienceBuffer[experienceKey].rolloutLength += 1
 				self.experienceBuffer[experienceKey].rewardRolloutSum += reward
 				self.experienceBuffer[experienceKey].lastStateInRollout = newExperience.stateAfterMove
