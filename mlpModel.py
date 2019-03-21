@@ -20,7 +20,7 @@ class MLPAIModel:
 		
 		self.gameNum = 0
 		self.modelIterations = 0
-		self.gameStartModelIterations = 0
+		self.modelIterationsInGame = 0
 		self.trainCriticEveryIter = 20
 		self.saveModelEveryIter = 100
 		self.explorationProb = 0.005
@@ -59,7 +59,7 @@ class MLPAIModel:
 	
 	def NewGame(self):
 		self.gameNum += 1
-		self.gameStartModelIterations = self.modelIterations
+		self.modelIterationsInGame = 0
 		if self.gameNum > 0 and self.gameNum % self.rolloutLengthIncreaseEveryGame == 0:
 			self.currentRolloutLengthMax = min(self.currentRolloutLengthMax + 1, self.absoluteMaxRolloutLength)
 		
@@ -178,7 +178,7 @@ class MLPAIModel:
 		
 		# build batch from current state and experiences buffer
 		newExperience = Experience()
-		newExperience.key = (self.gameNum, self.modelIterations)
+		newExperience.key = (self.gameNum, self.modelIterationsInGame)
 		newExperience.state = self.stateBeforeLastMove[0,:]
 		newExperience.stateAfterMove = stateAfterMove[0,:]
 		newExperience.move = self.lastModelMove
@@ -211,8 +211,9 @@ class MLPAIModel:
 		newExperience.bellmanDifference = bellmanDifferences[-1]
 		self.experienceBuffer[newExperience.key] = newExperience
 		self.modelIterations += 1
+		self.modelIterationsInGame += 1
 		
-		for experienceModelIteration in range(self.gameStartModelIterations, self.modelIterations):
+		for experienceModelIteration in range(self.modelIterationsInGame):
 			experienceKey = (self.gameNum, experienceModelIteration)
 			if experienceKey in self.experienceBuffer and self.experienceBuffer[experienceKey].rolloutLength < self.currentRolloutLengthMax:
 				self.experienceBuffer[experienceKey].rolloutLength += 1
