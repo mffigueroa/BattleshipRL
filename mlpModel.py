@@ -205,7 +205,7 @@ class MLPAIModel:
 		# train model and add new experience to buffer
 		bellmanDifferences = self.TrainOnExperiences(experiencesBatch, actorOutputsAtBatch)
 		self.experienceBuffer.UpdateBellmanDifferences(experiencesBatch.keys, bellmanDifferences[:-1])
-		if self.modelIterations > 0 and self.modelIterations % 100:
+		if self.modelIterations > 0 and self.modelIterations % 100 == 0:
 			self.logOutputter.Output('Bellman Difference: Avg - {}, Min - {}, Max - {}'.format(np.mean(bellmanDifferences), np.min(bellmanDifferences), np.max(bellmanDifferences)))
 		
 		newExperience.bellmanDifference = bellmanDifferences[-1]
