@@ -1,4 +1,5 @@
 import code
+import time
 import os.path
 import keras
 from keras import regularizers
@@ -6,7 +7,7 @@ from keras.models import load_model
 from LogOutputter import LogOutputter
 import numpy as np
 import threading
-import Queue
+import queue
 from ship import MoveOutcome
 from vector2 import Vector2
 from experienceReplayBuffer import ExperienceReplayBuffer, Experience
@@ -36,7 +37,7 @@ class MLPAIModel:
 		self.absoluteMaxRolloutLength = 10
 		self.rolloutLengthIncreaseEveryGame = 500
 		self.experienceBuffer = ExperienceReplayBuffer(experienceBufferSize, experienceBufferBatch, priorityRandomness, priorityBiasFactor)
-		self.newExperienceQueue = Queue.Queue()
+		self.newExperienceQueue = queue.Queue()
 		
 		self.normedBoardLength = 10
 		self.maxMoveOutcome = len(MoveOutcome) + 1 # add 1 for empty hit result
@@ -57,6 +58,7 @@ class MLPAIModel:
 		self.LoadModel()
 		
 		self.trainingThread = threading.Thread(target=self.TrainingThread)
+		self.trainingThreadStarted = False
 		
 		self.stateBeforeLastMove = None
 		self.lastModelOutput = None
@@ -128,19 +130,19 @@ class MLPAIModel:
 		self.logOutputter.Output('Experience Buffer Size: {}'.format(len(self.experienceBuffer)))
 		OutputModelMetrics(fitResult, self.logOutputter)
 	
-	def LogQValues(self, reward):
+	def LogQValues(self, reward, stateBeforeLastMove, lastModelOutput):
 		if not self.outputDiagnostics is None:
-			stateHash = tuple(self.stateBeforeLastMove.flatten().tolist())
+			stateHash = tuple(stateBeforeLastMove.flatten().tolist())
 			if not stateHash in self.diagnosticsStateAtOutput:
 				self.diagnosticsStateAtOutput.add(stateHash)
 				self.diagnosticsLogOutputter.Output('Input')
-				self.diagnosticsLogOutputter.Output(str(self.stateBeforeLastMove))
+				self.diagnosticsLogOutputter.Output(str(stateBeforeLastMove))
 				self.diagnosticsLogOutputter.Output('')
 				self.diagnosticsLogOutputter.Output('Reward')
 				self.diagnosticsLogOutputter.Output(str(reward))
 				self.diagnosticsLogOutputter.Output('')
 				self.diagnosticsLogOutputter.Output('Output')
-				self.diagnosticsLogOutputter.Output(str(self.lastModelOutput))
+				self.diagnosticsLogOutputter.Output(str(lastModelOutput))
 				self.diagnosticsLogOutputter.Output('')
 				self.diagnosticsLogOutputter.Output('')
 
@@ -185,8 +187,9 @@ class MLPAIModel:
 		newExperience.reward = reward
 		self.gameTurnNumber += 1
 		
-		if not self.trainingThread.is_alive():
+		if not self.trainingThreadStarted:
 			self.trainingThread.start()
+			self.trainingThreadStarted = True
 		
 		while self.newExperienceQueue.qsize() > 1000:
 			time.sleep(20)
@@ -207,7 +210,9 @@ class MLPAIModel:
 			
 			experiencesBatch = self.experienceBuffer.GetBatchMatrices()
 			newExperience = None
+			print('Hi')
 			if not self.newExperienceQueue.empty():
+				print('new experience')
 				newExperience = self.newExperienceQueue.get_nowait()
 				experiencesBatch.importanceSamplingWeights = np.append([1.0], experiencesBatch.importanceSamplingWeights)
 				
@@ -217,7 +222,7 @@ class MLPAIModel:
 					experiencesBatch.moves = np.append(experiencesBatch.moves, [newExperience.move])
 					experiencesBatch.rewards = np.append(experiencesBatch.rewards, [newExperience.reward])
 				else:
-					experiencesBatch.states = np.array([newExperience.state)
+					experiencesBatch.states = np.array([newExperience.state])
 					experiencesBatch.statesAfterMove = np.array([newExperience.stateAfterMove])
 					experiencesBatch.moves = np.array([newExperience.move])
 					experiencesBatch.rewards = np.array([newExperience.reward])
@@ -226,7 +231,7 @@ class MLPAIModel:
 				moveVec = Vector2(moveRow, moveCol)
 				self.logOutputter.Output('MLP shooting at {}'.format(moveVec))
 				
-				self.LogQValues(newExperience.reward)
+				#self.LogQValues(newExperience.reward)
 			
 			if len(experiencesBatch) < 1:
 				time.sleep(20)
