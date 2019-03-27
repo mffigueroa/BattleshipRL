@@ -20,10 +20,11 @@ from AIGameState import AIGameState
 from weightsContainer import WeightsContainer
 
 class MLPAIModel:
-	def __init__(self, playerNumber, logOutputter=None, outputDiagnostics=None):
+	def __init__(self, playerNumber, modelBuildLock, logOutputter=None, outputDiagnostics=None):
 		self.playerNumber = playerNumber
 		self.modelName = 'MLP Model v1'
 		
+		self.modelBuildLock = modelBuildLock
 		self.gameNum = 0
 		self.modelIterations = 0
 		self.gameTurnNumber = 0
@@ -59,9 +60,9 @@ class MLPAIModel:
 		self.inputDimension = self.normedBoardPositions * self.maxMoveOutcome + 2
 		self.outputDimension = self.normedBoardPositions
 		
-		#self.mainThreadSession = tf.Session(graph=tf.Graph())
-		#K.set_session(self.mainThreadSession)
-		self.LoadModel()
+		with self.modelBuildLock:
+			self.LoadModel()
+			print('Built main models')
 		
 		weightsContainerLock = threading.Lock()
 		self.actorWeights = WeightsContainer(weightsContainerLock)
@@ -74,7 +75,7 @@ class MLPAIModel:
 		self.criticModelVersion = self.criticWeights.GetVersion()
 		
 		self.trainingThread = threading.Thread(target=self.TrainingThread)
-		self.trainingThreadStarted = False
+		self.trainingThread.start()
 		
 		self.stateBeforeLastMove = None
 		self.lastModelOutput = None
@@ -109,17 +110,19 @@ class MLPAIModel:
 		self.actorModelFilename = '{}_actor.h5'.format(self.modelSavePrefix)
 		self.criticModelFilename = '{}_critic.h5'.format(self.modelSavePrefix)
 		
+		modelSuffix = 'Model{}_'.format(self.playerNumber)
+		
 		if os.path.isfile(self.actorModelFilename):
 			print('Loading {}...'.format(self.actorModelFilename))
 			self.actorModel = load_model(self.actorModelFilename)
 		else:
-			self.actorModel = BuildMLPModel(self.maxSeqLength, self.inputDimension, self.outputDimension)
+			self.actorModel = BuildMLPModel(self.maxSeqLength, self.inputDimension, self.outputDimension, tensorSuffix=('Actor' + modelSuffix))
 		
 		if os.path.isfile(self.criticModelFilename):
 			print('Loading {}...'.format(self.criticModelFilename))
 			self.criticModel = load_model(self.criticModelFilename)
 		else:
-			self.criticModel = BuildMLPModel(self.maxSeqLength, self.inputDimension, self.outputDimension)
+			self.criticModel = BuildMLPModel(self.maxSeqLength, self.inputDimension, self.outputDimension, tensorSuffix=('Critic' + modelSuffix))
 		
 	def GetModelName(self):
 		return self.modelName
@@ -221,10 +224,6 @@ class MLPAIModel:
 		newExperience.reward = reward
 		self.gameTurnNumber += 1
 		
-		if not self.trainingThreadStarted:
-			self.trainingThread.start()
-			self.trainingThreadStarted = True
-		
 		while self.newExperienceQueue.qsize() > 1000:
 			time.sleep(20)
 		
@@ -239,77 +238,79 @@ class MLPAIModel:
 		self.experienceBuffer.SetImportanceSamplingExponent(self.modelIterations / (self.modelIterations + 2000000))
 	
 	def TrainingThread(self):
-		with tf.Session(graph=tf.Graph()) as sess:
-			K.set_session(sess)
-			actorModel = BuildMLPModel(self.maxSeqLength, self.inputDimension, self.outputDimension)
-			criticModel = BuildMLPModel(self.maxSeqLength, self.inputDimension, self.outputDimension)
-			
+		with self.modelBuildLock:
+			sess = K.get_session()
+			with sess.graph.as_default():
+				modelSuffix = 'Model{}_'.format(self.playerNumber)
+				actorModel = BuildMLPModel(self.maxSeqLength, self.inputDimension, self.outputDimension, tensorSuffix=('Actor' + modelSuffix))
+				criticModel = BuildMLPModel(self.maxSeqLength, self.inputDimension, self.outputDimension, tensorSuffix=('Critic' + modelSuffix))
+				print('Built training models')
 			self.actorWeights.GetWeights(actorModel)
 			self.criticWeights.GetWeights(criticModel)
+		
+		while True:
+			self.UpdateImportanceSampling()
 			
-			while True:
-				self.UpdateImportanceSampling()
+			experiencesBatch = self.experienceBuffer.GetBatchMatrices()
+			newExperience = None
+			#print('Hi')
+			if not self.newExperienceQueue.empty():
+				#print('new experience')
+				newExperience = self.newExperienceQueue.get_nowait()
+				experiencesBatch.importanceSamplingWeights = np.append([1.0], experiencesBatch.importanceSamplingWeights)
 				
-				experiencesBatch = self.experienceBuffer.GetBatchMatrices()
-				newExperience = None
-				#print('Hi')
-				if not self.newExperienceQueue.empty():
-					#print('new experience')
-					newExperience = self.newExperienceQueue.get_nowait()
-					experiencesBatch.importanceSamplingWeights = np.append([1.0], experiencesBatch.importanceSamplingWeights)
-					
-					if experiencesBatch.states.shape[0] > 0:
-						experiencesBatch.states = np.append(experiencesBatch.states, [newExperience.state], axis=0)
-						experiencesBatch.statesAfterMove = np.append(experiencesBatch.statesAfterMove, [newExperience.stateAfterMove], axis=0)
-						experiencesBatch.moves = np.append(experiencesBatch.moves, [newExperience.move])
-						experiencesBatch.rewards = np.append(experiencesBatch.rewards, [newExperience.reward])
-					else:
-						experiencesBatch.states = np.array([newExperience.state])
-						experiencesBatch.statesAfterMove = np.array([newExperience.stateAfterMove])
-						experiencesBatch.moves = np.array([newExperience.move])
-						experiencesBatch.rewards = np.array([newExperience.reward])
-					
-					moveRow, moveCol = self.normedBoard.UnnormalizeBoardPosition(newExperience.move)
-					moveVec = Vector2(moveRow, moveCol)
-					self.logOutputter.Output('MLP shooting at {}'.format(moveVec))
-					
-					#self.LogQValues(newExperience.reward)
-				
-				if len(experiencesBatch) < 1:
-					time.sleep(20)
-					continue
-				
-				actorOutputsAtBatch = self.RunModelAtStates(experiencesBatch.states, model=actorModel)
-				
-				# train model and add new experience to buffer
-				bellmanDifferences = self.TrainOnExperiences(experiencesBatch, actorOutputsAtBatch, actorModel=actorModel, criticModel=criticModel)
-				self.actorWeights.PutWeights(actorModel)
-				
-				if not newExperience is None:
-					self.experienceBuffer.UpdateBellmanDifferences(experiencesBatch.keys, bellmanDifferences[:-1])
-					newExperience.bellmanDifference = bellmanDifferences[-1]
-					self.experienceBuffer[newExperience.key] = newExperience
+				if experiencesBatch.states.shape[0] > 0:
+					experiencesBatch.states = np.append(experiencesBatch.states, [newExperience.state], axis=0)
+					experiencesBatch.statesAfterMove = np.append(experiencesBatch.statesAfterMove, [newExperience.stateAfterMove], axis=0)
+					experiencesBatch.moves = np.append(experiencesBatch.moves, [newExperience.move])
+					experiencesBatch.rewards = np.append(experiencesBatch.rewards, [newExperience.reward])
 				else:
-					self.experienceBuffer.UpdateBellmanDifferences(experiencesBatch.keys, bellmanDifferences)
-					
-				if self.modelIterations > 0 and self.modelIterations % 100 == 0:
-					self.logOutputter.Output('Bellman Difference: Avg - {}, Min - {}, Max - {}'.format(np.mean(bellmanDifferences), np.min(bellmanDifferences), np.max(bellmanDifferences)))
-				self.modelIterations += 1
+					experiencesBatch.states = np.array([newExperience.state])
+					experiencesBatch.statesAfterMove = np.array([newExperience.stateAfterMove])
+					experiencesBatch.moves = np.array([newExperience.move])
+					experiencesBatch.rewards = np.array([newExperience.reward])
 				
-				if self.modelIterations % self.trainCriticEveryIter == 0:
-					self.TrainCritic(actorModel=actorModel, criticModel=criticModel)
-					self.criticWeights.PutWeights(criticModel)
-				if self.modelIterations > 0 and self.modelIterations % self.saveModelEveryIter == 0:
-					self.SaveModels(actorModel=actorModel, criticModel=criticModel)
+				moveRow, moveCol = self.normedBoard.UnnormalizeBoardPosition(newExperience.move)
+				moveVec = Vector2(moveRow, moveCol)
+				self.logOutputter.Output('MLP shooting at {}'.format(moveVec))
 				
-				if not newExperience is None:
-					gameTurnNumber = newExperience.key[-1]
-					for experienceGameTurn in range(gameTurnNumber):
-						experienceKey = (self.gameNum, experienceGameTurn)
-						if experienceKey in self.experienceBuffer and self.experienceBuffer[experienceKey].rolloutLength < self.currentRolloutLengthMax:
-							self.experienceBuffer[experienceKey].rolloutLength += 1
-							self.experienceBuffer[experienceKey].rewardRolloutSum += newExperience.reward
-							self.experienceBuffer[experienceKey].lastStateInRollout = newExperience.stateAfterMove
+				#self.LogQValues(newExperience.reward)
+			
+			if len(experiencesBatch) < 1:
+				time.sleep(20)
+				continue
+			
+			actorOutputsAtBatch = self.RunModelAtStates(experiencesBatch.states, model=actorModel)
+			
+			# train model and add new experience to buffer
+			bellmanDifferences = self.TrainOnExperiences(experiencesBatch, actorOutputsAtBatch, actorModel=actorModel, criticModel=criticModel)
+			self.actorWeights.PutWeights(actorModel)
+			
+			if not newExperience is None:
+				self.experienceBuffer.UpdateBellmanDifferences(experiencesBatch.keys, bellmanDifferences[:-1])
+				newExperience.bellmanDifference = bellmanDifferences[-1]
+				self.experienceBuffer[newExperience.key] = newExperience
+			else:
+				self.experienceBuffer.UpdateBellmanDifferences(experiencesBatch.keys, bellmanDifferences)
+				
+			if self.modelIterations > 0 and self.modelIterations % 100 == 0:
+				self.logOutputter.Output('Bellman Difference: Avg - {}, Min - {}, Max - {}'.format(np.mean(bellmanDifferences), np.min(bellmanDifferences), np.max(bellmanDifferences)))
+			self.modelIterations += 1
+			
+			if self.modelIterations % self.trainCriticEveryIter == 0:
+				self.TrainCritic(actorModel=actorModel, criticModel=criticModel)
+				self.criticWeights.PutWeights(criticModel)
+			if self.modelIterations > 0 and self.modelIterations % self.saveModelEveryIter == 0:
+				pass#self.SaveModels(actorModel=actorModel, criticModel=criticModel)
+			
+			if not newExperience is None:
+				gameTurnNumber = newExperience.key[-1]
+				for experienceGameTurn in range(gameTurnNumber):
+					experienceKey = (self.gameNum, experienceGameTurn)
+					if experienceKey in self.experienceBuffer and self.experienceBuffer[experienceKey].rolloutLength < self.currentRolloutLengthMax:
+						self.experienceBuffer[experienceKey].rolloutLength += 1
+						self.experienceBuffer[experienceKey].rewardRolloutSum += newExperience.reward
+						self.experienceBuffer[experienceKey].lastStateInRollout = newExperience.stateAfterMove
 	
 	def GetModelInputForState(self, stateVectors):
 		modelInput = np.zeros((1, self.maxSeqLength, self.inputDimension))
