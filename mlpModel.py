@@ -193,17 +193,17 @@ class MLPAIModel:
 		newExperience.move = self.lastModelMove
 		newExperience.reward = reward
 		
+		unitaryBatch = ExperiencesBatch({newExperience.key : newExperience}, [newExperience.key], [1.0])
+		actorOutputsAtBatch = self.RunModelAtStates(unitaryBatch.states)
+		bellmanDifference, bellmanTarget = self.GetCriticBellmanDifference(unitaryBatch, actorOutputsAtBatch)
+		newExperience.bellmanDifference = bellmanDifference[-1]
+		
+		self.experienceBuffer[newExperience.key] = newExperience
+		
 		if len(self.experienceBuffer) >= self.minExperiencesForTraining:
 			self.UpdateImportanceSampling()
 			experiencesBatch = self.experienceBuffer.GetBatchMatrices()
 			actorOutputsAtBatch = self.RunModelAtStates(experiencesBatch.states)
-			
-			experiencesBatch.states = np.append(experiencesBatch.states, [newExperience.state], axis=0)
-			experiencesBatch.statesAfterMove = np.append(experiencesBatch.statesAfterMove, [newExperience.stateAfterMove], axis=0)
-			experiencesBatch.moves = np.append(experiencesBatch.moves, [newExperience.move])
-			experiencesBatch.rewards = np.append(experiencesBatch.rewards, [newExperience.reward])
-			experiencesBatch.importanceSamplingWeights = np.append(experiencesBatch.importanceSamplingWeights, [1.0])
-			actorOutputsAtBatch = np.append(actorOutputsAtBatch, self.lastModelOutput, axis=0)
 			
 			# train model and add new experience to buffer
 			bellmanDifferences = self.TrainOnExperiences(experiencesBatch, actorOutputsAtBatch)
@@ -226,12 +226,6 @@ class MLPAIModel:
 				self.TrainCritic()			
 			if self.modelIterations > 0 and self.modelIterations % self.saveModelEveryIter == 0:
 				self.SaveModels()
-		else:
-			unitaryBatch = ExperiencesBatch({newExperience.key : newExperience}, [newExperience.key], [1.0])
-			actorOutputsAtBatch = self.RunModelAtStates(unitaryBatch.states)
-			bellmanDifference, bellmanTarget = self.GetCriticBellmanDifference(unitaryBatch, actorOutputsAtBatch)
-			newExperience.bellmanDifference = bellmanDifference[-1]
-			self.experienceBuffer[newExperience.key] = newExperience			
 		
 		self.logOutputter.Output('Experience Buffer Size: {}'.format(len(self.experienceBuffer)))
 		self.logOutputter.Output('New Experience Bellman Difference: {}'.format(newExperience.bellmanDifference))
