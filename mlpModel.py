@@ -26,7 +26,7 @@ class MLPAIModel:
 		self.explorationProb = 0.005
 		self.maxSeqLength = 1
 		
-		experienceBufferSize = 1000000
+		experienceBufferSize = 10000000
 		experienceBufferBatch = 99
 		priorityRandomness = 0.6
 		priorityBiasFactor = 0.01
@@ -34,6 +34,8 @@ class MLPAIModel:
 		self.absoluteMaxRolloutLength = 10
 		self.rolloutLengthIncreaseEveryGame = 500
 		self.experienceBuffer = ExperienceReplayBuffer(experienceBufferSize, experienceBufferBatch, priorityRandomness, priorityBiasFactor)
+		
+		self.minExperiencesForTraining = 200000
 		
 		self.normedBoardLength = 10
 		self.maxMoveOutcome = len(MoveOutcome) + 1 # add 1 for empty hit result
@@ -96,7 +98,7 @@ class MLPAIModel:
 			print('Loading {}...'.format(self.criticModelFilename))
 			self.criticModel = load_model(self.criticModelFilename)
 		else:
-			self.criticModel = BuildMLPModel(self.maxSeqLength, self.inputDimension, self.outputDimension, kernel_l2Reg=l2Regularizer, bias_l2Reg=l2Regularizer, last_kernel_l2Reg=biggerl2Regularizer, last_bias_l2Reg=biggerl2Regularizer)
+			self.criticModel = BuildMLPModel(self.maxSeqLength, self.inputDimension, self.outputDimension)
 		
 	def GetModelName(self):
 		return self.modelName
@@ -120,7 +122,6 @@ class MLPAIModel:
 	
 	def TrainModel(self, modelInput, correctModelOutput, importanceSamplingWeights=None):
 		fitResult = self.actorModel.fit(modelInput, correctModelOutput, batch_size=modelInput.shape[0], epochs=1, verbose=0, sample_weight=importanceSamplingWeights)
-		self.logOutputter.Output('Experience Buffer Size: {}'.format(len(self.experienceBuffer)))
 		OutputModelMetrics(fitResult, self.logOutputter)
 	
 	def LogQValues(self, reward):
@@ -162,7 +163,7 @@ class MLPAIModel:
 			stateOfRounds.append(self.gameState.stateSeq[-2].moveOutcomes)
 			ownShipsDestroyed = self.gameState.stateSeq[-2].aliveShips - state.aliveShips
 		
-		if self.stateBeforeLastMove is None or self.lastModelOutput is None or self.lastModelMove is None:
+		if self.stateBeforeLastMove is None or self.lastModelMove is None:
 			return
 		
 		numMovesAtPosition = self.gameState.GetMovesAtPosition(self.lastModelMove)
@@ -183,48 +184,38 @@ class MLPAIModel:
 		newExperience.stateAfterMove = stateAfterMove[0,:]
 		newExperience.move = self.lastModelMove
 		newExperience.reward = reward
+		newExperience.bellmanDifference = 2.0**30 # arbitrarily large value
 		
-		self.UpdateImportanceSampling()
-		experiencesBatch = self.experienceBuffer.GetBatchMatrices()
-		if experiencesBatch.states.shape[0] > 0:
+		self.experienceBuffer[newExperience.key] = newExperience
+		
+		self.logOutputter.Output('Experience Buffer Size: {}'.format(len(self.experienceBuffer)))
+		
+		if len(self.experienceBuffer) >= self.minExperiencesForTraining:
+			self.UpdateImportanceSampling()
+			experiencesBatch = self.experienceBuffer.GetBatchMatrices()
 			actorOutputsAtBatch = self.RunModelAtStates(experiencesBatch.states)
 			
-			experiencesBatch.states = np.append(experiencesBatch.states, stateAfterMove, axis=0)
-			experiencesBatch.statesAfterMove = np.append(experiencesBatch.statesAfterMove, self.stateBeforeLastMove, axis=0)
-			experiencesBatch.moves = np.append(experiencesBatch.moves, [self.lastModelMove])
-			experiencesBatch.rewards = np.append(experiencesBatch.rewards, [reward])
-			actorOutputsAtBatch = np.append(actorOutputsAtBatch, self.lastModelOutput, axis=0)
-		else:
-			experiencesBatch.states = stateAfterMove
-			experiencesBatch.statesAfterMove = self.stateBeforeLastMove
-			experiencesBatch.moves = np.array([self.lastModelMove])
-			experiencesBatch.rewards = np.array([reward])
-			actorOutputsAtBatch = self.lastModelOutput
+			# train model and add new experience to buffer
+			bellmanDifferences = self.TrainOnExperiences(experiencesBatch, actorOutputsAtBatch)
+			self.experienceBuffer.UpdateBellmanDifferences(experiencesBatch.keys, bellmanDifferences)
+			if self.modelIterations > 0 and self.modelIterations % 100 == 0:
+				self.logOutputter.Output('Bellman Difference: Avg - {}, Min - {}, Max - {}'.format(np.mean(bellmanDifferences), np.min(bellmanDifferences), np.max(bellmanDifferences)))
+			
+			self.modelIterations += 1
 		
-		experiencesBatch.importanceSamplingWeights = np.append([1.0], experiencesBatch.importanceSamplingWeights)
-		# train model and add new experience to buffer
-		bellmanDifferences = self.TrainOnExperiences(experiencesBatch, actorOutputsAtBatch)
-		self.experienceBuffer.UpdateBellmanDifferences(experiencesBatch.keys, bellmanDifferences[:-1])
-		if self.modelIterations > 0 and self.modelIterations % 100 == 0:
-			self.logOutputter.Output('Bellman Difference: Avg - {}, Min - {}, Max - {}'.format(np.mean(bellmanDifferences), np.min(bellmanDifferences), np.max(bellmanDifferences)))
+			for experienceModelIteration in range(self.modelIterationsInGame):
+				experienceKey = (self.gameNum, experienceModelIteration)
+				if experienceKey in self.experienceBuffer and self.experienceBuffer[experienceKey].rolloutLength < self.currentRolloutLengthMax:
+					self.experienceBuffer[experienceKey].rolloutLength += 1
+					self.experienceBuffer[experienceKey].rewardRolloutSum += reward
+					self.experienceBuffer[experienceKey].lastStateInRollout = newExperience.stateAfterMove
+			
+			if self.modelIterations % self.trainCriticEveryIter == 0:
+				self.TrainCritic()			
+			if self.modelIterations > 0 and self.modelIterations % self.saveModelEveryIter == 0:
+				self.SaveModels()
 		
-		newExperience.bellmanDifference = bellmanDifferences[-1]
-		self.experienceBuffer[newExperience.key] = newExperience
-		self.modelIterations += 1
 		self.modelIterationsInGame += 1
-		
-		for experienceModelIteration in range(self.modelIterationsInGame):
-			experienceKey = (self.gameNum, experienceModelIteration)
-			if experienceKey in self.experienceBuffer and self.experienceBuffer[experienceKey].rolloutLength < self.currentRolloutLengthMax:
-				self.experienceBuffer[experienceKey].rolloutLength += 1
-				self.experienceBuffer[experienceKey].rewardRolloutSum += reward
-				self.experienceBuffer[experienceKey].lastStateInRollout = newExperience.stateAfterMove
-		
-		if self.modelIterations % self.trainCriticEveryIter == 0:
-			self.TrainCritic()			
-		if self.modelIterations > 0 and self.modelIterations % self.saveModelEveryIter == 0:
-			self.SaveModels()
-		
 		self.stateBeforeLastMove = None
 		self.lastModelOutput = None
 		self.lastModelMove = None
@@ -245,6 +236,14 @@ class MLPAIModel:
 			raise Exception('MLP Model predict returned invalid result.')
 		return modelOutput
 	
+	def ExploreRandomly(self):
+		randomMove = np.random.randint(0,self.normedBoardPositions)
+		searchAttempts = 0
+		while self.gameState.GetMovesAtPosition(randomMove) >= 1 and searchAttempts < 10:
+			randomMove = np.random.randint(0,self.normedBoardPositions)
+			searchAttempts += 1
+		return randomMove
+	
 	def GetMovesFromModelOutput(self, modelOutputs, exploreRandomly=None):
 		movesSortedByQValue = np.argsort(-modelOutputs, axis=-1)
 		modelMoves = []
@@ -253,7 +252,7 @@ class MLPAIModel:
 		for rowNum in range(movesSortedByQValue.shape[0]):
 			currentTopK = 0
 			if exploreRandomly and np.random.rand(1) <= self.explorationProb:
-				modelMoves.append(np.random.randint(0,self.normedBoardPositions))
+				modelMoves.append(self.ExploreRandomly())
 				continue
 			for moveNumIndex in range(movesSortedByQValue.shape[1]):
 				moveNum = movesSortedByQValue[rowNum, moveNumIndex]				
@@ -273,12 +272,17 @@ class MLPAIModel:
 		
 	def GetNextMove(self):
 		modelInput = self.GetModelInputForState(self.gameState.stateSeqVectors)
-		modelOutput = self.RunModelAtStates(modelInput)		
-		boardPos = self.GetMovesFromModelOutput(modelOutput, exploreRandomly=True)
-		if len(boardPos.shape) > 0:
-			boardPos = boardPos.flatten()[0]
+		
+		if len(self.experienceBuffer) >= self.minExperiencesForTraining:
+			modelOutput = self.RunModelAtStates(modelInput)
+			boardPos = self.GetMovesFromModelOutput(modelOutput, exploreRandomly=True)
+			if len(boardPos.shape) > 0:
+				boardPos = boardPos.flatten()[0]
+			else:
+				boardPos = int(boardPos)
 		else:
-			boardPos = int(boardPos)
+			boardPos = self.ExploreRandomly()
+			modelOutput = None
 		
 		self.stateBeforeLastMove = modelInput
 		self.lastModelOutput = modelOutput
