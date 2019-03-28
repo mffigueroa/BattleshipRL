@@ -185,7 +185,7 @@ class MLPAIModel:
 		stateAfterMove = self.GetModelInputForState(self.gameState.stateSeqVectors)
 		self.LogQValues(reward)
 		
-		# build batch from current state and experiences buffer
+		# add new experience to buffer
 		newExperience = Experience()
 		newExperience.key = (self.gameNum, self.experiencesInGame)
 		newExperience.state = self.stateBeforeLastMove[0,:]
@@ -205,14 +205,12 @@ class MLPAIModel:
 			experiencesBatch = self.experienceBuffer.GetBatchMatrices()
 			actorOutputsAtBatch = self.RunModelAtStates(experiencesBatch.states)
 			
-			# train model and add new experience to buffer
+			# train model
 			bellmanDifferences = self.TrainOnExperiences(experiencesBatch, actorOutputsAtBatch)
-			self.experienceBuffer.UpdateBellmanDifferences(experiencesBatch.keys, bellmanDifferences[:-1])
+			self.experienceBuffer.UpdateBellmanDifferences(experiencesBatch.keys, bellmanDifferences)
 			if self.modelIterations > 0 and self.modelIterations % 100 == 0:
 				self.logOutputter.Output('Bellman Difference: Avg - {}, Min - {}, Max - {}'.format(np.mean(bellmanDifferences), np.min(bellmanDifferences), np.max(bellmanDifferences)))
 			
-			newExperience.bellmanDifference = bellmanDifferences[-1]
-			self.experienceBuffer[newExperience.key] = newExperience
 			self.modelIterations += 1
 			
 			#for experienceModelIteration in range(self.experiencesInGame):
