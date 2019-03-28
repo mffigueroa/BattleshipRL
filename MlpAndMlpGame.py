@@ -8,10 +8,10 @@ from LogOutputter import LogOutputter
 
 mlpLogs = [ LogOutputter('mlpModel_0_log.txt'), LogOutputter('mlpModel_1_log.txt') ]
 
-mlpModel_0 = MLPAIModel(0, mlpLogs[0], outputDiagnostics=True)
+mlpModel_0 = MLPAIModel(0, mlpLogs[0], outputDiagnostics=None)
 aiPlayer_0 = AIPlayer(mlpModel_0, mlpLogs[0])
 
-mlpModel_1 = MLPAIModel(1, mlpLogs[1], outputDiagnostics=True)
+mlpModel_1 = MLPAIModel(1, mlpLogs[1], outputDiagnostics=None)
 aiPlayer_1 = AIPlayer(mlpModel_1, mlpLogs[1])
 
 players = [aiPlayer_0, aiPlayer_1]

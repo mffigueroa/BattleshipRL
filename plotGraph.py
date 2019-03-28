@@ -50,6 +50,17 @@ def PlotGraphWithTrendLine(yCoords, graphFigure, title, xLabel, yLabel):
 	graphFigure.set_xlabel(xLabel)
 	graphFigure.set_ylabel(yLabel)
 
+def PlotHexBin(yCoords, graphFigure, title, xLabel, yLabel, xDivs=None, yDivs=None):
+	if xDivs is None:
+		xDivs = len(yCoords) // 20
+	if yDivs is None:
+		yDivs = 5
+	graphFigure.cla()
+	graphFigure.hexbin(np.arange(len(yCoords)), np.array(yCoords), cmap='magma', gridsize=(xDivs, yDivs))
+	graphFigure.set_title(title)
+	graphFigure.set_xlabel(xLabel)
+	graphFigure.set_ylabel(yLabel)
+
 def PlotGameStatus():
 	global firstDraw
 	global fig
@@ -75,8 +86,6 @@ def PlotGameStatus():
 		logFiles.append(fileObj)
 		logNum += 1
 	
-	#samplePerc = 0.01
-	samplePerc = 1.0
 	gamesBeforeParse = len(newGameLineNums)
 	logNum = 0
 	
@@ -94,28 +103,27 @@ def PlotGameStatus():
 			if line is None or len(line) < 1:
 				break
 			lastFileOffsets[logNum] += len(line)
-			doSample = np.random.rand() <= samplePerc
 			if line[:len(rewardPrefix)] == rewardPrefix:
 				reward = float(line[len(rewardPrefix):-1])
 				rewardsInSum.append(reward)
 				if len(rewardsInSum) > 200:
 					rewardsInSum = rewardsInSum[1:]
-				if doSample:
-					movAvgRewards.append(sum(rewardsInSum) / len(rewardsInSum))
-					rewards.append(reward)
+				movAvgRewards.append(sum(rewardsInSum) / len(rewardsInSum))
+				rewards.append(reward)
 			elif line[:len(lossPrefix)] == lossPrefix:
 				loss = float(line[len(lossPrefix):-1])
 				lossesRollingWindow.append(loss)
 				if len(lossesRollingWindow) > 2000:
 					lossesRollingWindow = lossesRollingWindow[1000:]
-				if doSample:
-					losses.append(loss)
+				losses.append(loss)
 			elif logNum == 0 and line[:len(turnPrefix)] == turnPrefix:
 				turnStartLineNums.append(lineNum)
 			elif logNum == 0 and line[:len(newGamePrefix)] == newGamePrefix:
 				newGameLineNums.append(lineNum)
 			
 			lineNum += 1
+		rewards = rewards[:len(losses)]
+		movAvgRewards = movAvgRewards[:len(losses)]
 		if len(players[logNum].keys()) < 1:
 			players[logNum] = { 'rewards' : rewards, 'losses' : losses, 'movAvgRewards' : movAvgRewards, 'lossesRollingWindow' : lossesRollingWindow }
 		else:
@@ -152,13 +160,12 @@ def PlotGameStatus():
 		fig, ((player0_rewards, player1_rewards), (player0_movAvgRewards, player1_movAvgRewards), (player0_loss, player1_loss)) = plt.subplots(3, 2, sharex='col', sharey='row')
 	
 	fig.suptitle('{} Games, {} Turns'.format(numGames, numTurns))
-	
-	PlotGraphWithTrendLine(players[0]['rewards'], player0_rewards, 'Rewards', 'Turn #', 'Moves')
-	PlotGraphWithTrendLine(players[1]['rewards'], player1_rewards, 'Rewards', 'Turn #', 'Moves')
-	PlotGraphWithTrendLine(players[0]['movAvgRewards'], player0_movAvgRewards, 'Moving Avg Rewards', 'Turn #', 'Moves')
-	PlotGraphWithTrendLine(players[1]['movAvgRewards'], player1_movAvgRewards, 'Moving Avg Rewards', 'Turn #', 'Moves')
-	PlotGraphWithTrendLine(players[0]['losses'], player0_loss, 'Losses', 'Turn #', 'Moves')
-	PlotGraphWithTrendLine(players[1]['losses'], player1_loss, 'Losses', 'Turn #', 'Moves')
+	PlotHexBin(players[0]['rewards'], player0_rewards, 'Rewards', 'Turn #', 'Reward')
+	PlotHexBin(players[1]['rewards'], player1_rewards, 'Rewards', 'Turn #', 'Reward')
+	PlotHexBin(players[0]['movAvgRewards'], player0_movAvgRewards, 'Moving Avg Rewards', 'Turn #', 'Reward')
+	PlotHexBin(players[1]['movAvgRewards'], player1_movAvgRewards, 'Moving Avg Rewards', 'Turn #', 'Reward')
+	PlotHexBin(players[0]['losses'], player0_loss, 'Losses', 'Turn #', 'Loss')
+	PlotHexBin(players[1]['losses'], player1_loss, 'Losses', 'Turn #', 'Loss')
 	
 	player0_maxLossInWindow = np.max(players[0]['lossesRollingWindow'])
 	player0_loss.set_ylim((0, player0_maxLossInWindow * 1.1))

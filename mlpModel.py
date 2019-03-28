@@ -20,22 +20,22 @@ class MLPAIModel:
 		
 		self.gameNum = 0
 		self.modelIterations = 0
-		self.modelIterationsInGame = 0
+		self.experiencesInGame = 0
 		self.trainCriticEveryIter = 20
 		self.saveModelEveryIter = 100
 		self.explorationProb = 0.005
 		self.maxSeqLength = 1
 		
-		experienceBufferSize = 10000000
+		experienceBufferSize = 1000000
 		experienceBufferBatch = 99
 		priorityRandomness = 0.6
 		priorityBiasFactor = 0.01
 		self.currentRolloutLengthMax = 1
-		self.absoluteMaxRolloutLength = 10
+		self.absoluteMaxRolloutLength = 3
 		self.rolloutLengthIncreaseEveryGame = 500
 		self.experienceBuffer = ExperienceReplayBuffer(experienceBufferSize, experienceBufferBatch, priorityRandomness, priorityBiasFactor)
 		
-		self.minExperiencesForTraining = 200000
+		self.minExperiencesForTraining = 80000
 		
 		self.normedBoardLength = 10
 		self.maxMoveOutcome = len(MoveOutcome) + 1 # add 1 for empty hit result
@@ -61,9 +61,9 @@ class MLPAIModel:
 	
 	def NewGame(self):
 		self.gameNum += 1
-		self.modelIterationsInGame = 0
-		if self.gameNum > 0 and self.gameNum % self.rolloutLengthIncreaseEveryGame == 0:
-			self.currentRolloutLengthMax = min(self.currentRolloutLengthMax + 1, self.absoluteMaxRolloutLength)
+		self.experiencesInGame = 0
+		#if self.gameNum > 0 and self.gameNum % self.rolloutLengthIncreaseEveryGame == 0 and len(self.experienceBuffer) >= self.minExperiencesForTraining:
+		#	self.currentRolloutLengthMax = min(self.currentRolloutLengthMax + 1, self.absoluteMaxRolloutLength)
 		
 	def ClearState(self):		
 		self.logOutputter.Output('\n\n\n\n\nClearing MLP model state\n\n\n\n\n')
@@ -179,12 +179,12 @@ class MLPAIModel:
 		
 		# build batch from current state and experiences buffer
 		newExperience = Experience()
-		newExperience.key = (self.gameNum, self.modelIterationsInGame)
+		newExperience.key = (self.gameNum, self.experiencesInGame)
 		newExperience.state = self.stateBeforeLastMove[0,:]
 		newExperience.stateAfterMove = stateAfterMove[0,:]
 		newExperience.move = self.lastModelMove
 		newExperience.reward = reward
-		newExperience.bellmanDifference = 2.0**30 # arbitrarily large value
+		newExperience.bellmanDifference = 1000 # large value
 		
 		self.experienceBuffer[newExperience.key] = newExperience
 		
@@ -202,20 +202,20 @@ class MLPAIModel:
 				self.logOutputter.Output('Bellman Difference: Avg - {}, Min - {}, Max - {}'.format(np.mean(bellmanDifferences), np.min(bellmanDifferences), np.max(bellmanDifferences)))
 			
 			self.modelIterations += 1
-		
-			for experienceModelIteration in range(self.modelIterationsInGame):
-				experienceKey = (self.gameNum, experienceModelIteration)
-				if experienceKey in self.experienceBuffer and self.experienceBuffer[experienceKey].rolloutLength < self.currentRolloutLengthMax:
-					self.experienceBuffer[experienceKey].rolloutLength += 1
-					self.experienceBuffer[experienceKey].rewardRolloutSum += reward
-					self.experienceBuffer[experienceKey].lastStateInRollout = newExperience.stateAfterMove
+			
+			#for experienceModelIteration in range(self.experiencesInGame):
+			#	experienceKey = (self.gameNum, experienceModelIteration)
+			#	if experienceKey in self.experienceBuffer and self.experienceBuffer[experienceKey].rolloutLength < self.currentRolloutLengthMax:
+			#		self.experienceBuffer[experienceKey].rolloutLength += 1
+			#		self.experienceBuffer[experienceKey].rewardRolloutSum += reward
+			#		self.experienceBuffer[experienceKey].lastStateInRollout = newExperience.stateAfterMove
 			
 			if self.modelIterations % self.trainCriticEveryIter == 0:
 				self.TrainCritic()			
 			if self.modelIterations > 0 and self.modelIterations % self.saveModelEveryIter == 0:
 				self.SaveModels()
 		
-		self.modelIterationsInGame += 1
+		self.experiencesInGame += 1
 		self.stateBeforeLastMove = None
 		self.lastModelOutput = None
 		self.lastModelMove = None
