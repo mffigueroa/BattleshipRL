@@ -56,10 +56,11 @@ def PlotHexBin(yCoords, graphFigure, title, xLabel, yLabel, xDivs=None, yDivs=No
 	if yDivs is None:
 		yDivs = 5
 	graphFigure.cla()
-	if logScale is None or not logScale:
-		graphFigure.hexbin(np.arange(len(yCoords)), np.array(yCoords), cmap='magma', gridsize=(xDivs, yDivs))
-	else:
-		graphFigure.hexbin(np.arange(len(yCoords)), np.array(yCoords), cmap='magma', gridsize=(xDivs, yDivs), bins='log')
+	if len(yCoords) > xDivs:
+		if logScale is None or not logScale:
+			graphFigure.hexbin(np.arange(len(yCoords)), np.array(yCoords), cmap='magma', gridsize=(xDivs, yDivs))
+		else:
+			graphFigure.hexbin(np.arange(len(yCoords)), np.array(yCoords), cmap='magma', gridsize=(xDivs, yDivs), bins='log')
 	graphFigure.set_title(title)
 	graphFigure.set_xlabel(xLabel)
 	graphFigure.set_ylabel(yLabel)
@@ -125,8 +126,8 @@ def PlotGameStatus():
 				newGameLineNums.append(lineNum)
 			
 			lineNum += 1
-		rewards = rewards[:len(losses)]
-		movAvgRewards = movAvgRewards[:len(losses)]
+		#rewards = rewards[:len(losses)]
+		#movAvgRewards = movAvgRewards[:len(losses)]
 		if len(players[logNum].keys()) < 1:
 			players[logNum] = { 'rewards' : rewards, 'losses' : losses, 'movAvgRewards' : movAvgRewards, 'lossesRollingWindow' : lossesRollingWindow }
 		else:
@@ -163,10 +164,12 @@ def PlotGameStatus():
 		fig, ((player0_rewards, player1_rewards), (player0_movAvgRewards, player1_movAvgRewards), (player0_loss, player1_loss)) = plt.subplots(3, 2, sharex='col', sharey='row')
 	
 	fig.suptitle('{} Games, {} Turns'.format(numGames, numTurns))
-	PlotHexBin(players[0]['rewards'], player0_rewards, 'Rewards', 'Turn #', 'Reward', logScale=True)
-	PlotHexBin(players[1]['rewards'], player1_rewards, 'Rewards', 'Turn #', 'Reward', logScale=True)
-	PlotHexBin(players[0]['movAvgRewards'], player0_movAvgRewards, 'Moving Avg Rewards', 'Turn #', 'Reward')
-	PlotHexBin(players[1]['movAvgRewards'], player1_movAvgRewards, 'Moving Avg Rewards', 'Turn #', 'Reward')
+	player0_numLosses = len(players[0]['losses'])
+	player1_numLosses = len(players[1]['losses'])
+	PlotHexBin(players[0]['rewards'][-player0_numLosses:], player0_rewards, 'Rewards', 'Turn #', 'Reward', logScale=True)
+	PlotHexBin(players[1]['rewards'][-player1_numLosses:], player1_rewards, 'Rewards', 'Turn #', 'Reward', logScale=True)
+	PlotHexBin(players[0]['movAvgRewards'][-player0_numLosses:], player0_movAvgRewards, 'Moving Avg Rewards', 'Turn #', 'Reward')
+	PlotHexBin(players[1]['movAvgRewards'][-player1_numLosses:], player1_movAvgRewards, 'Moving Avg Rewards', 'Turn #', 'Reward')
 	PlotHexBin(players[0]['losses'], player0_loss, 'Losses', 'Turn #', 'Loss')
 	PlotHexBin(players[1]['losses'], player1_loss, 'Losses', 'Turn #', 'Loss')
 	

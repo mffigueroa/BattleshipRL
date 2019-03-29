@@ -30,9 +30,10 @@ class MLPAIModel:
 		experienceBufferBatch = 99
 		priorityRandomness = 0.6
 		priorityBiasFactor = 0.01
-		self.currentRolloutLengthMax = 1
+		self.currentRolloutLengthMax = 3
 		self.absoluteMaxRolloutLength = 3
 		self.rolloutLengthIncreaseEveryGame = 500
+		self.rewardDiscount = 0.99
 		self.experienceBuffer = ExperienceReplayBuffer(experienceBufferSize, experienceBufferBatch, priorityRandomness, priorityBiasFactor)
 		
 		self.minExperiencesForTraining = 80000
@@ -109,7 +110,7 @@ class MLPAIModel:
 		actorBestMoves = np.argmax(actorOutput, axis=-1)
 		batchIndices = np.arange(statesAfterMove.shape[0])
 		maxQValuesAtState = criticOutput[batchIndices,actorBestMoves]
-		return rewards + 0.99*maxQValuesAtState
+		return rewards + self.rewardDiscount*maxQValuesAtState
 		
 	def GetCriticBellmanDifference(self, experiencesBatch, actorOutputs):
 		batchIndices = np.arange(len(experiencesBatch.moves))
@@ -129,6 +130,15 @@ class MLPAIModel:
 	def TrainModel(self, modelInput, correctModelOutput, importanceSamplingWeights=None):
 		fitResult = self.actorModel.fit(modelInput, correctModelOutput, batch_size=modelInput.shape[0], epochs=1, verbose=0, sample_weight=importanceSamplingWeights)
 		OutputModelMetrics(fitResult, self.logOutputter)
+	
+	def GetExperienceBellmanDifferences(self, experiences):
+		keys = [experience.key for experience in experiences]
+		importanceSamplingWeights = [1.0]*len(keys)
+		experiencesDict = { experience.key : experience for experience in experiences }
+		batch = ExperiencesBatch(experiencesDict, keys, importanceSamplingWeights)
+		actorOutputsAtBatch = self.RunModelAtStates(batch.states)
+		bellmanDifference, bellmanTarget = self.GetCriticBellmanDifference(batch, actorOutputsAtBatch)
+		return bellmanDifference
 	
 	def LogQValues(self, reward):
 		if not self.outputDiagnostics is None:
@@ -187,18 +197,41 @@ class MLPAIModel:
 		
 		# add new experience to buffer
 		newExperience = Experience()
-		newExperience.key = (self.gameNum, self.experiencesInGame)
+		newExperience.key = (self.gameNum, self.experiencesInGame, 0)
 		newExperience.state = self.stateBeforeLastMove[0,:]
 		newExperience.stateAfterMove = stateAfterMove[0,:]
 		newExperience.move = self.lastModelMove
 		newExperience.reward = reward
+		newExperience.rolloutLength = 0
 		
-		unitaryBatch = ExperiencesBatch({newExperience.key : newExperience}, [newExperience.key], [1.0])
-		actorOutputsAtBatch = self.RunModelAtStates(unitaryBatch.states)
-		bellmanDifference, bellmanTarget = self.GetCriticBellmanDifference(unitaryBatch, actorOutputsAtBatch)
-		newExperience.bellmanDifference = bellmanDifference[-1]
+		newExperience.bellmanDifference = self.GetExperienceBellmanDifferences([newExperience])[-1]
 		
 		self.experienceBuffer[newExperience.key] = newExperience
+		
+		experienceNumLookback = max(self.experiencesInGame - self.currentRolloutLengthMax, 0)
+		newRolloutExperiences = []
+		for experienceNumber in range(self.experiencesInGame - self.currentRolloutLengthMax, self.experiencesInGame):			
+			experienceKey = (self.gameNum, experienceNumber, self.experiencesInGame - experienceNumber - 1)
+			oldExperience = self.experienceBuffer[experienceKey]
+			rolloutLength = self.experiencesInGame - experienceNumber
+			rolloutExperienceKey = (self.gameNum, experienceNumber, rolloutLength)
+			if experienceKey in self.experienceBuffer:
+				rolloutExperience = Experience()
+				rolloutExperience.key = rolloutExperienceKey
+				rolloutExperience.state = oldExperience.state
+				rolloutExperience.stateAfterMove = newExperience.stateAfterMove
+				rolloutExperience.move = oldExperience.move
+				rolloutExperience.reward = oldExperience.reward + self.rewardDiscount*reward
+				rolloutExperience.rolloutLength = rolloutLength
+				newRolloutExperiences.append(rolloutExperience)
+		
+		if len(newRolloutExperiences) > 0:
+			newRolloutsBellmanDifferences = self.GetExperienceBellmanDifferences(newRolloutExperiences)
+			for experienceNum in range(len(newRolloutExperiences)):
+				experience = newRolloutExperiences[experienceNum]
+				experience.bellmanDifference = newRolloutsBellmanDifferences[experienceNum]
+				self.experienceBuffer[experience.key] = experience
+				self.logOutputter.Output('New Experience Bellman Difference - Rollout #{}: {}'.format(experience.rolloutLength, experience.bellmanDifference))
 		
 		if len(self.experienceBuffer) >= self.minExperiencesForTraining:
 			self.UpdateImportanceSampling()
@@ -212,13 +245,6 @@ class MLPAIModel:
 				self.logOutputter.Output('Bellman Difference: Avg - {}, Min - {}, Max - {}'.format(np.mean(bellmanDifferences), np.min(bellmanDifferences), np.max(bellmanDifferences)))
 			
 			self.modelIterations += 1
-			
-			#for experienceModelIteration in range(self.experiencesInGame):
-			#	experienceKey = (self.gameNum, experienceModelIteration)
-			#	if experienceKey in self.experienceBuffer and self.experienceBuffer[experienceKey].rolloutLength < self.currentRolloutLengthMax:
-			#		self.experienceBuffer[experienceKey].rolloutLength += 1
-			#		self.experienceBuffer[experienceKey].rewardRolloutSum += reward
-			#		self.experienceBuffer[experienceKey].lastStateInRollout = newExperience.stateAfterMove
 			
 			if self.modelIterations % self.trainCriticEveryIter == 0:
 				self.TrainCritic()			
