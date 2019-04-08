@@ -174,10 +174,10 @@ def PlotGameStatus():
 	PlotHexBin(players[1]['losses'], player1_loss, 'Losses', 'Turn #', 'Loss')
 	
 	player0_maxLossInWindow = np.max(players[0]['lossesRollingWindow'])
-	player0_loss.set_ylim((0, player0_maxLossInWindow * 1.1))
+	player0_loss.set_ylim((0, player0_maxLossInWindow * 10.1))
 	
 	player1_maxLossInWindow = np.max(players[1]['lossesRollingWindow'])
-	player1_loss.set_ylim((0, player1_maxLossInWindow * 1.1))
+	player1_loss.set_ylim((0, player1_maxLossInWindow * 10.1))
 	
 	if firstDraw:
 		plt.show()
